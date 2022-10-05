@@ -18,9 +18,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/choria-io/fisk"
@@ -48,6 +50,7 @@ type subCmd struct {
 	headersOnly           bool
 	stream                string
 	jetStream             bool
+	unsubscribe           bool
 	ignoreSubjects        []string
 	slowConsumer          time.Duration
 	slowConsumerAsync     bool
@@ -78,6 +81,7 @@ func configureSubCommand(app commandHost) {
 	act.Flag("ignore-subject", "Subjects for which corresponding messages will be ignored and therefore not shown in the output").Short('I').PlaceHolder("SUBJECT").StringsVar(&c.ignoreSubjects)
 	act.Flag("slow-consumer", "Mimic a slow consumer").Default("0s").DurationVar(&c.slowConsumer)
 	act.Flag("slow-consumer-async", "Continue processing messages").Default("false").BoolVar(&c.slowConsumerAsync)
+	act.Flag("unsubscribe", "Unsubscribe on termination").Default("true").BoolVar(&c.unsubscribe)
 }
 
 func init() {
@@ -182,7 +186,6 @@ func (c *subCmd) subscribe(p *fisk.ParseContext) error {
 		}
 
 		if ctr == c.limit {
-			sub.Unsubscribe()
 			// if no reply matching, or if didn't yet get all replies
 			if !c.match || len(matchMap) == 0 {
 				cancel()
@@ -343,7 +346,25 @@ func (c *subCmd) subscribe(p *fisk.ParseContext) error {
 		return err
 	}
 
-	<-ctx.Done()
+	interrupt := make(chan os.Signal, 1)
+	signal.Notify(interrupt, syscall.SIGINT, syscall.SIGTERM)
+
+	select {
+	case <-interrupt:
+		if c.unsubscribe {
+			log.Printf("Unsubscribing")
+			if err := sub.Unsubscribe(); err != nil {
+				return err
+			}
+		}
+	case <-ctx.Done():
+		if c.unsubscribe {
+			log.Printf("Unsubscribing")
+			if err := sub.Unsubscribe(); err != nil {
+				return err
+			}
+		}
+	}
 
 	return nil
 }
