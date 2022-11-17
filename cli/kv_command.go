@@ -362,7 +362,7 @@ func (c *kvCommand) historyAction(_ *fisk.ParseContext) error {
 			val = fmt.Sprintf("%s...%s", val[0:15], val[len(val)-15:])
 		}
 
-		table.AddRow(r.Key(), r.Revision(), c.strForOp(r.Operation()), r.Created().Format(time.RFC822), humanize.Comma(int64(len(r.Value()))), val)
+		table.AddRow(r.Key(), r.Revision(), c.strForOp(r.Operation()), r.Created().Format(time.StampMilli), humanize.Comma(int64(len(r.Value()))), val)
 	}
 
 	fmt.Println(table.Render())
@@ -718,7 +718,7 @@ func (c *kvCommand) showStatus(store nats.KeyValue) error {
 	if nfo == nil {
 		fmt.Printf("Information for Key-Value Store Bucket %s\n", status.Bucket())
 	} else {
-		fmt.Printf("Information for Key-Value Store Bucket %s created %s\n", status.Bucket(), nfo.Created.Local().Format(time.RFC3339))
+		fmt.Printf("Information for Key-Value Store Bucket %s created %s\n", status.Bucket(), nfo.Created.Local().Format(time.StampMilli))
 	}
 
 	fmt.Println()
