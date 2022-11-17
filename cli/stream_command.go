@@ -230,7 +230,7 @@ func configureStreamCommand(app commandHost) {
 	strSubs.Arg("stream", "Stream name").StringVar(&c.stream)
 	strSubs.Arg("filter", "Limit the subjects to those matching a filter").Default(">").StringVar(&c.filterSubject)
 	strSubs.Flag("json", "Produce JSON output").Short('j').UnNegatableBoolVar(&c.json)
-	strSubs.Flag("sort", "Adjusts the sorting order (name, messages)").Default("messages").EnumVar(&c.reportSort, "name", "subjects", "messages", "count")
+	strSubs.Flag("sort", "Adjusts the sorting order (name, messages)").Default("name").EnumVar(&c.reportSort, "name", "subjects", "messages", "count")
 	strSubs.Flag("reverse", "Reverse sort servers").Short('R').UnNegatableBoolVar(&c.reportSortReverse)
 	strSubs.Flag("names", "SList only subject names").BoolVar(&c.listNames)
 
