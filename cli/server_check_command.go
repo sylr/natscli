@@ -20,10 +20,12 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
 	"github.com/choria-io/fisk"
+	"github.com/nats-io/jsm.go"
 	"github.com/nats-io/jsm.go/api"
 	"github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
@@ -46,19 +48,24 @@ type SrvCheckCmd struct {
 	sourcesMaxSources   int
 	sourcesMessagesWarn uint64
 	sourcesMessagesCrit uint64
+	subjectsWarn        int
+	subjectsCrit        int
 
 	raftExpect       int
 	raftLagCritical  uint64
 	raftSeenCritical time.Duration
 
-	jsMemWarn           int
-	jsMemCritical       int
-	jsStoreWarn         int
-	jsStoreCritical     int
-	jsStreamsWarn       int
-	jsStreamsCritical   int
-	jsConsumersWarn     int
-	jsConsumersCritical int
+	jsMemWarn             int
+	jsMemCritical         int
+	jsStoreWarn           int
+	jsStoreCritical       int
+	jsStreamsWarn         int
+	jsStreamsCritical     int
+	jsConsumersWarn       int
+	jsConsumersCritical   int
+	jsReplicas            bool
+	jsReplicaSeenCritical time.Duration
+	jsReplicaLagCritical  uint64
 
 	srvName        string
 	srvCPUWarn     int
@@ -76,6 +83,11 @@ type SrvCheckCmd struct {
 	srvJSRequired  bool
 	srvURL         *url.URL
 
+	msgSubject string
+	msgAgeWarn time.Duration
+	msgAgeCrit time.Duration
+	msgRegexp  *regexp.Regexp
+
 	kvBucket     string
 	kvValuesCrit int
 	kvValuesWarn int
@@ -85,14 +97,9 @@ type SrvCheckCmd struct {
 func configureServerCheckCommand(srv *fisk.CmdClause) {
 	c := &SrvCheckCmd{}
 
-	help := `Health check for NATS servers
-
-   connection  - connects and does a request-reply check
-   stream      - checks JetStream streams for source, mirror and cluster health
-   meta        - JetStream Meta Cluster health
-`
-	check := srv.Command("check", help)
+	check := srv.Command("check", "Health check for NATS servers")
 	check.Flag("format", "Render the check in a specific format (nagios, json, prometheus, text)").Default("nagios").EnumVar(&checkRenderFormat, "nagios", "json", "prometheus", "text")
+	check.Flag("namespace", "The prometheus namespace to use in output").Default(opts.PrometheusNamespace).StringVar(&opts.PrometheusNamespace)
 	check.Flag("outfile", "Save output to a file rather than STDOUT").StringVar(&checkRenderOutFile)
 
 	conn := check.Command("connection", "Checks basic server connection").Alias("conn").Default().Action(c.checkConnection)
@@ -114,6 +121,15 @@ func configureServerCheckCommand(srv *fisk.CmdClause) {
 	stream.Flag("peer-seen-critical", "Critical threshold for how long ago a cluster peer should have been seen").PlaceHolder("DURATION").Default("10s").DurationVar(&c.raftSeenCritical)
 	stream.Flag("msgs-warn", "Warn if there are fewer than this many messages in the stream").PlaceHolder("MSGS").Uint64Var(&c.sourcesMessagesWarn)
 	stream.Flag("msgs-critical", "Critical if there are fewer than this many messages in the stream").PlaceHolder("MSGS").Uint64Var(&c.sourcesMessagesCrit)
+	stream.Flag("subjects-warn", "Critical threshold for subjects in the stream").PlaceHolder("SUBJECTS").Default("-1").IntVar(&c.subjectsWarn)
+	stream.Flag("subjects-critical", "Warning threshold for subjects in the stream").PlaceHolder("SUBJECTS").Default("-1").IntVar(&c.subjectsCrit)
+
+	msg := check.Command("message", "Checks properties of a message stored in a stream").Action(c.checkMsg)
+	msg.Flag("stream", "The streams to check").Required().StringVar(&c.sourcesStream)
+	msg.Flag("subject", "The subject to fetch a message from").Default(">").StringVar(&c.msgSubject)
+	msg.Flag("age-warn", "Warning threshold for message age as a duration").PlaceHolder("DURATION").DurationVar(&c.msgAgeWarn)
+	msg.Flag("age-critical", "Critical threshold for message age as a duration").PlaceHolder("DURATION").DurationVar(&c.msgAgeCrit)
+	msg.Flag("content", "Regular expression to check the content against").PlaceHolder("REGEX").RegexpVar(&c.msgRegexp)
 
 	meta := check.Command("meta", "Check JetStream cluster state").Alias("raft").Action(c.checkRaft)
 	meta.Flag("expect", "Number of servers to expect").Required().PlaceHolder("SERVERS").IntVar(&c.raftExpect)
@@ -129,6 +145,9 @@ func configureServerCheckCommand(srv *fisk.CmdClause) {
 	js.Flag("streams-critical", "Critical threshold for number of streams used, in percent").Default("-1").IntVar(&c.jsStreamsCritical)
 	js.Flag("consumers-warn", "Warning threshold for number of consumers used, in percent").Default("-1").IntVar(&c.jsConsumersWarn)
 	js.Flag("consumers-critical", "Critical threshold for number of consumers used, in percent").Default("-1").IntVar(&c.jsConsumersCritical)
+	js.Flag("replicas", "Checks if all streams have healthy replicas").Default("true").BoolVar(&c.jsReplicas)
+	js.Flag("replica-seen-critical", "Critical threshold for when a stream replica should have been seen, as a duration").Default("5s").DurationVar(&c.jsReplicaSeenCritical)
+	js.Flag("replica-lag-critical", "Critical threshold for how many operations behind a peer can be").Default("200").Uint64Var(&c.jsReplicaLagCritical)
 
 	serv := check.Command("server", "Checks a NATS Server health").Action(c.checkSrv)
 	serv.Flag("name", "Server name to require in the result").Required().StringVar(&c.srvName)
@@ -256,10 +275,10 @@ func (r *result) renderHuman() string {
 	}
 
 	table = newTableWriter("")
-	table.AddHeaders("Metric", "Value", "Unit", "Critical Threshold", "Warning Threshold")
+	table.AddHeaders("Metric", "Value", "Unit", "Critical Threshold", "Warning Threshold", "Description")
 	lines = 0
 	for _, pd := range r.PerfData {
-		table.AddRow(pd.Name, pd.Value, pd.Unit, pd.Crit, pd.Warn)
+		table.AddRow(pd.Name, pd.Value, pd.Unit, pd.Crit, pd.Warn, pd.Help)
 		lines++
 	}
 	if lines > 0 {
@@ -277,6 +296,10 @@ func (r *result) renderPrometheus() string {
 		r.Check = r.Name
 	}
 
+	if opts.PrometheusNamespace == "" {
+		opts.PrometheusNamespace = "nats_server_check"
+	}
+
 	registry := prometheus.NewRegistry()
 	prometheus.DefaultRegisterer = registry
 	prometheus.DefaultGatherer = registry
@@ -289,7 +312,7 @@ func (r *result) renderPrometheus() string {
 		}
 
 		gauge := prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: fmt.Sprintf("nats_server_check_%s_%s", r.Check, pd.Name),
+			Name: prometheus.BuildFQName(opts.PrometheusNamespace, r.Check, pd.Name),
 			Help: help,
 		}, []string{"item"})
 		prometheus.MustRegister(gauge)
@@ -718,6 +741,109 @@ func (c *SrvCheckCmd) checkJS(_ *fisk.ParseContext) error {
 	err = c.checkAccountInfo(check, info)
 	check.criticalIfErr(err, "JetStream not available: %s", err)
 
+	if c.jsReplicas {
+		streams, err := mgr.Streams(nil)
+		check.criticalIfErr(err, "JetStream not available: %s", err)
+
+		err = c.checkStreamClusterHealth(check, streams)
+		check.criticalIfErr(err, "JetStream not available: %s", err)
+	}
+
+	return nil
+}
+
+func (c *SrvCheckCmd) checkStreamClusterHealth(check *result, info []*jsm.Stream) error {
+	var okCnt, noLeaderCnt, notEnoughReplicasCnt, critCnt, lagCritCnt, seenCritCnt int
+
+	for _, s := range info {
+		nfo, err := s.LatestInformation()
+		if err != nil {
+			critCnt++
+			continue
+		}
+
+		if nfo.Config.Replicas == 1 {
+			okCnt++
+			continue
+		}
+
+		if nfo.Cluster == nil {
+			critCnt++
+			continue
+		}
+
+		if nfo.Cluster.Leader == "" {
+			noLeaderCnt++
+			continue
+		}
+
+		if len(nfo.Cluster.Replicas) != s.Replicas()-1 {
+			notEnoughReplicasCnt++
+			continue
+		}
+
+		for _, r := range nfo.Cluster.Replicas {
+			if r.Offline {
+				critCnt++
+				continue
+			}
+
+			if r.Active > c.jsReplicaSeenCritical {
+				seenCritCnt++
+				continue
+			}
+			if r.Lag > c.jsReplicaLagCritical {
+				lagCritCnt++
+				continue
+			}
+		}
+
+		okCnt++
+	}
+
+	check.pd(&perfDataItem{
+		Name:  "replicas_ok",
+		Value: float64(okCnt),
+		Help:  "Streams with healthy cluster state",
+	})
+
+	check.pd(&perfDataItem{
+		Name:  "replicas_no_leader",
+		Value: float64(noLeaderCnt),
+		Help:  "Streams with no leader elected",
+	})
+
+	check.pd(&perfDataItem{
+		Name:  "replicas_missing_replicas",
+		Value: float64(notEnoughReplicasCnt),
+		Help:  "Streams where there are fewer known replicas than configured",
+	})
+
+	check.pd(&perfDataItem{
+		Name:  "replicas_lagged",
+		Value: float64(lagCritCnt),
+		Crit:  float64(c.jsReplicaLagCritical),
+		Help:  fmt.Sprintf("Streams with > %d lagged replicas", c.jsReplicaLagCritical),
+	})
+
+	check.pd(&perfDataItem{
+		Name:  "replicas_not_seen",
+		Value: float64(seenCritCnt),
+		Crit:  c.jsReplicaSeenCritical.Seconds(),
+		Unit:  "s",
+		Help:  fmt.Sprintf("Streams with replicas seen > %d ago", c.jsReplicaSeenCritical),
+	})
+
+	check.pd(&perfDataItem{
+		Name:  "replicas_fail",
+		Value: float64(critCnt),
+		Help:  "Streams unhealthy cluster state",
+	})
+
+	if critCnt > 0 || notEnoughReplicasCnt > 0 || noLeaderCnt > 0 || seenCritCnt > 0 || lagCritCnt > 0 {
+		check.critical("%d unhealthy streams", critCnt+notEnoughReplicasCnt+noLeaderCnt)
+	}
+
 	return nil
 }
 
@@ -935,6 +1061,24 @@ func (c *SrvCheckCmd) checkStream(_ *fisk.ParseContext) error {
 		check.critical("%d messages", info.State.Msgs)
 	}
 
+	check.pd(&perfDataItem{Name: "subjects", Value: float64(info.State.NumSubjects), Warn: float64(c.subjectsWarn), Crit: float64(c.subjectsCrit), Help: "Number of subjects stored in the stream"})
+	if c.subjectsWarn > 0 || c.subjectsCrit > 0 {
+		ns := info.State.NumSubjects
+		if c.subjectsWarn < c.subjectsCrit { // it means we're asserting that there are fewer subjects than thresholds
+			if ns >= c.subjectsCrit {
+				check.critical("%d subjects", info.State.NumSubjects)
+			} else if ns >= c.subjectsWarn {
+				check.warn("%d subjects", info.State.NumSubjects)
+			}
+		} else { // it means we're asserting that there are more subjects than thresholds
+			if ns <= c.subjectsCrit {
+				check.critical("%d subjects", info.State.NumSubjects)
+			} else if ns <= c.subjectsWarn {
+				check.warn("%d subjects", info.State.NumSubjects)
+			}
+		}
+	}
+
 	switch {
 	case stream.IsMirror():
 		err = c.checkMirror(check, info)
@@ -1014,6 +1158,47 @@ func (c *SrvCheckCmd) checkSources(check *result, info *api.StreamInfo) error {
 	}
 	if len(info.Sources) > c.sourcesMaxSources {
 		check.critical("%d sources of max expected %d", len(info.Sources), c.sourcesMaxSources)
+	}
+
+	return nil
+}
+
+func (c *SrvCheckCmd) checkMsg(_ *fisk.ParseContext) error {
+	check := &result{Name: "Stream Message", Check: "message"}
+	defer check.GenericExit()
+
+	_, mgr, err := prepareHelper("", natsOpts()...)
+	check.criticalIfErr(err, "connection failed")
+
+	msg, err := mgr.ReadLastMessageForSubject(c.sourcesStream, c.msgSubject)
+	check.criticalIfErr(err, "msg load failed")
+
+	check.pd(&perfDataItem{
+		Help:  "The age of the message",
+		Name:  "age",
+		Value: time.Since(msg.Time).Round(time.Millisecond).Seconds(),
+		Warn:  c.msgAgeWarn.Seconds(),
+		Crit:  c.msgAgeCrit.Seconds(),
+		Unit:  "s",
+	})
+
+	check.pd(&perfDataItem{
+		Help:  "The size of the message",
+		Name:  "size",
+		Value: float64(len(msg.Data)),
+		Unit:  "B",
+	})
+
+	if c.msgAgeWarn > 0 || c.msgAgeCrit > 0 {
+		if c.msgAgeCrit > 0 && msg.Time.Before(time.Now().Add(-1*c.msgAgeCrit)) {
+			check.critical("%v old", time.Since(msg.Time).Round(time.Millisecond))
+		} else if c.msgAgeWarn > 0 && msg.Time.Before(time.Now().Add(-1*c.msgAgeWarn)) {
+			check.warn("%v old", time.Since(msg.Time).Round(time.Millisecond))
+		}
+	}
+
+	if c.msgRegexp != nil && !c.msgRegexp.Match(msg.Data) {
+		check.critical("does not match regex: %s", c.msgRegexp.String())
 	}
 
 	return nil

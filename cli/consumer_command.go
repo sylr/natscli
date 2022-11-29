@@ -426,7 +426,6 @@ func (c *consumerCmd) rmAction(_ *fisk.ParseContext) error {
 		c.nc, c.mgr, err = prepareHelper("", natsOpts()...)
 		fisk.FatalIfError(err, "setup failed")
 
-		fmt.Printf("Performing consumer delete of %q > %q without prompts of validation\n", c.stream, c.consumer)
 		err = c.mgr.DeleteConsumer(c.stream, c.consumer)
 		if err != nil {
 			if err == context.DeadlineExceeded {
@@ -971,6 +970,7 @@ func (c *consumerCmd) prepareConfig(pc *fisk.ParseContext) (cfg *api.ConsumerCon
 		err = askOne(&survey.Input{
 			Message: "Start policy (all, new, last, subject, 1h, msg sequence)",
 			Help:    "This controls how the Consumer starts out, does it make all messages available, only the latest, latest per subject, ones after a certain time or time sequence. Settable using --deliver",
+			Default: "all",
 		}, &c.startPolicy, survey.WithValidator(survey.Required))
 		fisk.FatalIfError(err, "could not request start policy")
 	}
