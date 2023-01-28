@@ -14,9 +14,11 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"math"
 	"os"
 	"os/exec"
@@ -51,6 +53,7 @@ type streamCmd struct {
 	outFile          string
 	filterSubject    string
 	showAll          bool
+	acceptDefaults   bool
 
 	destination           string
 	subjects              []string
@@ -197,6 +200,7 @@ func configureStreamCommand(app commandHost) {
 	strAdd.Flag("republish-source", "Republish messages to --republish-destination").PlaceHolder("SOURCE").StringVar(&c.repubSource)
 	strAdd.Flag("republish-destination", "Republish destination for messages in --republish-source").PlaceHolder("DEST").StringVar(&c.repubDest)
 	strAdd.Flag("republish-headers", "Republish only message headers, no bodies").UnNegatableBoolVar(&c.repubHeadersOnly)
+	strAdd.Flag("defaults", "Accept default values for all prompts").UnNegatableBoolVar(&c.acceptDefaults)
 
 	strLs := str.Command("ls", "List all known Streams").Alias("list").Alias("l").Action(c.lsAction)
 	strLs.Flag("subject", "Limit the list to streams with matching subjects").StringVar(&c.filterSubject)
@@ -354,15 +358,17 @@ func (c *streamCmd) subjectsAction(_ *fisk.ParseContext) (err error) {
 	}
 
 	cols := 1
-	format := fmt.Sprintf("  %%%ds: %%s\n", longest)
 	countWidth := len(humanize.Comma(int64(most)))
+	table := newTableWriter(fmt.Sprintf("%d Subjects in stream %s", len(names), c.stream))
 	switch {
 	case longest+countWidth < 20:
 		cols = 3
-		format = fmt.Sprintf("  %%20s: %%%ds %%20s: %%%ds %%20s: %%%ds\n", countWidth, countWidth, countWidth)
+		table.AddHeaders("Subject", "Count", "Subject", "Count", "Subject", "Count")
 	case longest+countWidth < 30:
 		cols = 2
-		format = fmt.Sprintf("  %%30s: %%%ds %%30s: %%%ds\n", countWidth, countWidth)
+		table.AddHeaders("Subject", "Count", "Subject", "Count")
+	default:
+		table.AddHeaders("Subject", "Count")
 	}
 
 	sort.Slice(names, func(i, j int) bool {
@@ -380,15 +386,24 @@ func (c *streamCmd) subjectsAction(_ *fisk.ParseContext) (err error) {
 		return
 	}
 
+	comma := func(i uint64) string {
+		if i == 0 {
+			return ""
+		}
+		return humanize.Comma(int64(i))
+	}
+
 	sliceGroups(names, cols, func(g []string) {
 		if cols == 1 {
-			fmt.Printf(format, g[0], humanize.Comma(int64(subs[g[0]])))
+			table.AddRow(g[0], comma(subs[g[0]]))
 		} else if cols == 2 {
-			fmt.Printf(format, g[0], humanize.Comma(int64(subs[g[0]])), g[1], humanize.Comma(int64(subs[g[1]])))
+			table.AddRow(g[0], comma(subs[g[0]]), g[1], comma(subs[g[1]]))
 		} else {
-			fmt.Printf(format, g[0], humanize.Comma(int64(subs[g[0]])), g[1], humanize.Comma(int64(subs[g[1]])), g[2], humanize.Comma(int64(subs[g[2]])))
+			table.AddRow(g[0], comma(subs[g[0]]), g[1], comma(subs[g[1]]), g[2], comma(subs[g[2]]))
 		}
 	})
+
+	fmt.Println(table.Render())
 
 	return nil
 }
@@ -417,7 +432,7 @@ func (c *streamCmd) findAction(_ *fisk.ParseContext) (err error) {
 		return fmt.Errorf("setup failed: %v", err)
 	}
 
-	opts := []jsm.StreamQueryOpt{}
+	var opts []jsm.StreamQueryOpt
 	if c.fServer != "" {
 		opts = append(opts, jsm.StreamQueryServerName(c.fServer))
 	}
@@ -453,9 +468,9 @@ func (c *streamCmd) findAction(_ *fisk.ParseContext) (err error) {
 	case c.json:
 		out, err = toJSON(found)
 	case c.listNames:
-		out = c.renderStreamsAsList(found)
+		out = c.renderStreamsAsList(found, nil)
 	default:
-		out, err = c.renderStreamsAsTable(found)
+		out, err = c.renderStreamsAsTable(found, nil)
 	}
 	if err != nil {
 		return err
@@ -937,7 +952,7 @@ func (c *streamCmd) reportAction(_ *fisk.ParseContext) error {
 	dg := dot.NewGraph(dot.Directed)
 	dg.Label("Stream Replication Structure")
 
-	err = mgr.EachStream(filter, func(stream *jsm.Stream) {
+	missing, err := mgr.EachStream(filter, func(stream *jsm.Stream) {
 		info, err := stream.LatestInformation()
 		fisk.FatalIfError(err, "could not get stream info for %s", stream.Name())
 
@@ -1047,6 +1062,8 @@ func (c *streamCmd) reportAction(_ *fisk.ParseContext) error {
 	if c.reportLeaderDistrib && len(leaders) > 0 {
 		renderRaftLeaders(leaders, "Streams")
 	}
+
+	c.renderMissing(os.Stdout, missing)
 
 	return nil
 }
@@ -1824,6 +1841,28 @@ func (c *streamCmd) prepareConfig(_ *fisk.ParseContext, requireSize bool) api.St
 			cfg.Subjects = c.subjects
 		}
 
+		if len(c.placementTags) > 0 {
+			if cfg.Placement == nil {
+				cfg.Placement = &api.Placement{}
+			}
+			cfg.Placement.Tags = c.placementTags
+		}
+
+		if c.placementCluster != "" {
+			if cfg.Placement == nil {
+				cfg.Placement = &api.Placement{}
+			}
+			cfg.Placement.Cluster = c.placementCluster
+		}
+
+		if c.description != "" {
+			cfg.Description = c.description
+		}
+
+		if c.replicas > 0 {
+			cfg.Replicas = int(c.replicas)
+		}
+
 		return *cfg
 	}
 
@@ -1851,6 +1890,39 @@ func (c *streamCmd) prepareConfig(_ *fisk.ParseContext, requireSize bool) api.St
 
 	if c.mirror != "" && len(c.subjects) > 0 {
 		fisk.Fatalf("mirrors cannot listen for messages on subjects")
+	}
+
+	if c.acceptDefaults {
+		if c.storage == "" {
+			c.storage = "file"
+		}
+		if c.replicas == 0 {
+			c.replicas = 1
+		}
+		if c.retentionPolicyS == "" {
+			c.retentionPolicyS = "Limits"
+		}
+		if c.discardPolicy == "" {
+			c.discardPolicy = "Old"
+		}
+		if c.maxMsgLimit == 0 {
+			c.maxMsgLimit = -1
+		}
+		if c.maxMsgPerSubjectLimit == 0 {
+			c.maxMsgPerSubjectLimit = -1
+		}
+		if c.maxBytesLimitString == "" {
+			c.maxBytesLimit = -1
+		}
+		if requireSize && c.maxBytesLimitString == "" {
+			c.maxBytesLimit = 256 * 1024 * 1024
+		}
+		if c.maxAgeLimit == "" {
+			c.maxAgeLimit = "-1"
+		}
+		if c.maxMsgSizeString == "" {
+			c.maxMsgSize = -1
+		}
 	}
 
 	if c.storage == "" {
@@ -1954,12 +2026,16 @@ func (c *streamCmd) prepareConfig(_ *fisk.ParseContext, requireSize bool) api.St
 		if maxAge > 0 && maxAge < 2*time.Minute {
 			defaultDW = maxAge.String()
 		}
-		err = askOne(&survey.Input{
-			Message: "Duplicate tracking time window",
-			Default: defaultDW,
-			Help:    "Duplicate messages are identified by the Msg-Id headers and tracked within a window of this size. Supports units (s)econds, (m)inutes, (h)ours, (y)ears, (M)onths, (d)ays. Settable using --dupe-window.",
-		}, &c.dupeWindow)
-		fisk.FatalIfError(err, "invalid input")
+		if c.acceptDefaults {
+			c.dupeWindow = defaultDW
+		} else {
+			err = askOne(&survey.Input{
+				Message: "Duplicate tracking time window",
+				Default: defaultDW,
+				Help:    "Duplicate messages are identified by the Msg-Id headers and tracked within a window of this size. Supports units (s)econds, (m)inutes, (h)ours, (y)ears, (M)onths, (d)ays. Settable using --dupe-window.",
+			}, &c.dupeWindow)
+			fisk.FatalIfError(err, "invalid input")
+		}
 	}
 
 	if c.dupeWindow != "" {
@@ -1967,21 +2043,23 @@ func (c *streamCmd) prepareConfig(_ *fisk.ParseContext, requireSize bool) api.St
 		fisk.FatalIfError(err, "invalid duplicate window format")
 	}
 
-	if !c.allowRollupSet {
-		c.allowRollup, err = askConfirmation("Allow message Roll-ups", false)
-		fisk.FatalIfError(err, "invalid input")
-	}
+	if !c.acceptDefaults {
+		if !c.allowRollupSet {
+			c.allowRollup, err = askConfirmation("Allow message Roll-ups", false)
+			fisk.FatalIfError(err, "invalid input")
+		}
 
-	if !c.denyDeleteSet {
-		allow, err := askConfirmation("Allow message deletion", true)
-		fisk.FatalIfError(err, "invalid input")
-		c.denyDelete = !allow
-	}
+		if !c.denyDeleteSet {
+			allow, err := askConfirmation("Allow message deletion", true)
+			fisk.FatalIfError(err, "invalid input")
+			c.denyDelete = !allow
+		}
 
-	if !c.denyPurgeSet {
-		allow, err := askConfirmation("Allow purging subjects or the entire stream", true)
-		fisk.FatalIfError(err, "invalid input")
-		c.denyPurge = !allow
+		if !c.denyPurgeSet {
+			allow, err := askConfirmation("Allow purging subjects or the entire stream", true)
+			fisk.FatalIfError(err, "invalid input")
+			c.denyPurge = !allow
+		}
 	}
 
 	cfg := api.StreamConfig{
@@ -2364,7 +2442,7 @@ func (c *streamCmd) lsAction(_ *fisk.ParseContext) error {
 		filter = &jsm.StreamNamesFilter{Subject: c.filterSubject}
 	}
 
-	err = mgr.EachStream(filter, func(s *jsm.Stream) {
+	missing, err := mgr.EachStream(filter, func(s *jsm.Stream) {
 		if !c.showAll && s.IsInternal() {
 			skipped = true
 			return
@@ -2384,7 +2462,7 @@ func (c *streamCmd) lsAction(_ *fisk.ParseContext) error {
 	}
 
 	if c.listNames {
-		fmt.Println(c.renderStreamsAsList(streams))
+		fmt.Println(c.renderStreamsAsList(streams, missing))
 		return nil
 	}
 
@@ -2396,7 +2474,7 @@ func (c *streamCmd) lsAction(_ *fisk.ParseContext) error {
 		return nil
 	}
 
-	out, err := c.renderStreamsAsTable(streams)
+	out, err := c.renderStreamsAsTable(streams, missing)
 	if err != nil {
 		return err
 	}
@@ -2406,18 +2484,19 @@ func (c *streamCmd) lsAction(_ *fisk.ParseContext) error {
 	return nil
 }
 
-func (c *streamCmd) renderStreamsAsList(streams []*jsm.Stream) string {
-	names := make([]string, len(streams))
-	for i, s := range streams {
-		names[i] = s.Name()
+func (c *streamCmd) renderStreamsAsList(streams []*jsm.Stream, missing []string) string {
+	var names []string
+	for _, s := range streams {
+		names = append(names, s.Name())
 	}
+	names = append(names, missing...)
 
 	sort.Strings(names)
 
 	return strings.Join(names, "\n")
 }
 
-func (c *streamCmd) renderStreamsAsTable(streams []*jsm.Stream) (string, error) {
+func (c *streamCmd) renderStreamsAsTable(streams []*jsm.Stream, missing []string) (string, error) {
 	sort.Slice(streams, func(i, j int) bool {
 		info, _ := streams[i].LatestInformation()
 		jnfo, _ := streams[j].LatestInformation()
@@ -2425,6 +2504,7 @@ func (c *streamCmd) renderStreamsAsTable(streams []*jsm.Stream) (string, error) 
 		return info.State.Bytes < jnfo.State.Bytes
 	})
 
+	var out bytes.Buffer
 	var table *tablewriter.Table
 	if c.filterSubject == "" {
 		table = newTableWriter("Streams")
@@ -2437,7 +2517,30 @@ func (c *streamCmd) renderStreamsAsTable(streams []*jsm.Stream) (string, error) 
 		table.AddRow(s.Name(), s.Description(), nfo.Created.Local().Format("2006-01-02 15:04:05"), humanize.Comma(int64(nfo.State.Msgs)), humanize.IBytes(nfo.State.Bytes), humanizeDuration(time.Since(nfo.State.LastTime)))
 	}
 
-	return table.Render(), nil
+	fmt.Fprintln(&out, table.Render())
+
+	c.renderMissing(&out, missing)
+
+	return out.String(), nil
+}
+
+func (c *streamCmd) renderMissing(out io.Writer, missing []string) {
+	toany := func(items []string) (res []any) {
+		for _, i := range items {
+			res = append(res, any(i))
+		}
+		return res
+	}
+
+	if len(missing) > 0 {
+		fmt.Fprintln(out)
+		sort.Strings(missing)
+		table := newTableWriter("Inaccessible Streams")
+		sliceGroups(missing, 4, func(names []string) {
+			table.AddRow(toany(names)...)
+		})
+		fmt.Fprint(out, table.Render())
+	}
 }
 
 func (c *streamCmd) rmMsgAction(_ *fisk.ParseContext) (err error) {

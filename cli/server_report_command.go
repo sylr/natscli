@@ -524,7 +524,7 @@ func (c *SrvReportCmd) renderConnections(report []connInfo) {
 		}
 
 		if i < limit {
-			table.AddRow(cid, name, srvName, cluster, info.IP, acc, info.Uptime, humanize.Comma(info.InMsgs), humanize.Comma(info.OutMsgs), humanize.IBytes(uint64(info.InBytes)), humanize.IBytes(uint64(info.OutBytes)), len(info.Subs))
+			table.AddRow(cid, name, srvName, cluster, fmt.Sprintf("%s:%d", info.IP, info.Port), acc, info.Uptime, humanize.Comma(info.InMsgs), humanize.Comma(info.OutMsgs), humanize.IBytes(uint64(info.InBytes)), humanize.IBytes(uint64(info.OutBytes)), len(info.Subs))
 		}
 	}
 
@@ -653,7 +653,6 @@ func (c *SrvReportCmd) getConnz(limit int, nc *nats.Conn) (connzList, error) {
 	offset := 0
 	for _, conn := range result {
 		if conn.Connz.Offset+conn.Connz.Limit < conn.Connz.Total {
-
 			offset = conn.Connz.Offset + conn.Connz.Limit + 1
 			break
 		}

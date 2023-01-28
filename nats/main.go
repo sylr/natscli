@@ -1,4 +1,4 @@
-// Copyright 2020 The NATS Authors
+// Copyright 2020-2022 The NATS Authors
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -19,6 +19,7 @@ import (
 	"runtime/debug"
 
 	"github.com/choria-io/fisk"
+
 	"github.com/nats-io/natscli/cli"
 )
 
@@ -56,6 +57,7 @@ See 'nats cheat' for a quick cheatsheet of commands`
 	ncli.Flag("tlskey", "TLS private key").Envar("NATS_KEY").PlaceHolder("FILE").ExistingFileVar(&opts.TlsKey)
 	ncli.Flag("tlsca", "TLS certificate authority chain").Envar("NATS_CA").PlaceHolder("FILE").ExistingFileVar(&opts.TlsCA)
 	ncli.Flag("timeout", "Time to wait on responses from NATS").Default("5s").Envar("NATS_TIMEOUT").PlaceHolder("DURATION").DurationVar(&opts.Timeout)
+	ncli.Flag("socks-proxy", "SOCKS5 proxy for connecting to NATS server").Envar("NATS_SOCKS_PROXY").PlaceHolder("PROXY").StringVar(&opts.SocksProxy)
 	ncli.Flag("js-api-prefix", "Subject prefix for access to JetStream API").PlaceHolder("PREFIX").StringVar(&opts.JsApiPrefix)
 	ncli.Flag("js-event-prefix", "Subject prefix for access to JetStream Advisories").PlaceHolder("PREFIX").StringVar(&opts.JsEventPrefix)
 	ncli.Flag("js-domain", "JetStream domain to access").PlaceHolder("DOMAIN").StringVar(&opts.JsDomain)
@@ -63,6 +65,7 @@ See 'nats cheat' for a quick cheatsheet of commands`
 	ncli.Flag("domain", "JetStream domain to access").PlaceHolder("DOMAIN").Hidden().StringVar(&opts.JsDomain)
 	ncli.Flag("context", "Configuration context").Envar("NATS_CONTEXT").PlaceHolder("NAME").StringVar(&opts.CfgCtx)
 	ncli.Flag("trace", "Trace API interactions").UnNegatableBoolVar(&opts.Trace)
+	ncli.Flag("no-context", "Disable the selected context").UnNegatableBoolVar(&cli.SkipContexts)
 
 	log.SetFlags(log.Ltime)
 

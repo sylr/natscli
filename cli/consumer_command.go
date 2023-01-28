@@ -17,6 +17,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"math"
 	"math/rand"
 	"os"
@@ -37,17 +38,18 @@ import (
 )
 
 type consumerCmd struct {
-	consumer    string
-	stream      string
-	json        bool
-	listNames   bool
-	force       bool
-	ack         bool
-	raw         bool
-	destination string
-	inputFile   string
-	outFile     string
-	showAll     bool
+	consumer       string
+	stream         string
+	json           bool
+	listNames      bool
+	force          bool
+	ack            bool
+	raw            bool
+	destination    string
+	inputFile      string
+	outFile        string
+	showAll        bool
+	acceptDefaults bool
 
 	selectedConsumer *jsm.Consumer
 
@@ -133,9 +135,9 @@ func configureConsumerCommand(app commandHost) {
 		f.Flag("wait", "Acknowledgement waiting time").Default("-1s").DurationVar(&c.ackWait)
 		if !edit {
 			f.Flag("inactive-threshold", "How long to allow an ephemeral consumer to be idle before removing it").PlaceHolder("THRESHOLD").DurationVar(&c.inactiveThreshold)
-			f.Flag("replicas", "Sets a custom replica count rather than inherit from the stream").IntVar(&c.replicas)
 			f.Flag("memory", "Force the consumer state to be stored in memory rather than inherit from the stream").UnNegatableBoolVar(&c.memory)
 		}
+		f.Flag("replicas", "Sets a custom replica count rather than inherit from the stream").IntVar(&c.replicas)
 	}
 
 	cons := app.Command("consumer", "JetStream Consumer management").Alias("con").Alias("obs").Alias("c")
@@ -164,6 +166,7 @@ func configureConsumerCommand(app commandHost) {
 	consAdd.Flag("validate", "Only validates the configuration against the official Schema").UnNegatableBoolVar(&c.validateOnly)
 	consAdd.Flag("output", "Save configuration instead of creating").PlaceHolder("FILE").StringVar(&c.outFile)
 	addCreateFlags(consAdd, false)
+	consAdd.Flag("defaults", "Accept default values for all prompts").UnNegatableBoolVar(&c.acceptDefaults)
 
 	edit := cons.Command("edit", "Edits the configuration of a consumer").Action(c.editAction)
 	edit.Arg("stream", "Stream name").StringVar(&c.stream)
@@ -355,6 +358,10 @@ func (c *consumerCmd) editAction(pc *fisk.ParseContext) error {
 
 		if c.filterSubject != "_unset_" {
 			ncfg.FilterSubject = c.filterSubject
+		}
+
+		if c.replicas > 0 {
+			ncfg.Replicas = c.replicas
 		}
 	}
 
@@ -954,6 +961,43 @@ func (c *consumerCmd) prepareConfig(pc *fisk.ParseContext) (cfg *api.ConsumerCon
 
 	cfg.DeliverSubject = c.delivery
 
+	if c.acceptDefaults {
+		if c.deliveryGroup == "_unset_" {
+			c.deliveryGroup = ""
+		}
+		if c.startPolicy == "" {
+			c.startPolicy = "all"
+		}
+		if c.ackPolicy == "" {
+			c.ackPolicy = "none"
+			if c.pull {
+				c.ackPolicy = "explicit"
+			}
+		}
+		if c.maxDeliver == 0 {
+			c.maxDeliver = -1
+		}
+		if c.maxAckPending == -1 {
+			c.maxAckPending = 0
+		}
+		if c.replayPolicy == "" {
+			c.replayPolicy = "instant"
+		}
+		if c.filterSubject == "_unset_" {
+			c.filterSubject = ""
+		}
+		if c.idleHeartbeat == "" {
+			c.idleHeartbeat = "-1"
+		}
+		if !c.hdrsOnlySet {
+			c.hdrsOnlySet = true
+		}
+		if cfg.DeliverSubject != "" {
+			c.replayPolicy = "instant"
+			c.fcSet = true
+		}
+	}
+
 	if cfg.DeliverSubject != "" && c.deliveryGroup == "_unset_" {
 		err = askOne(&survey.Input{
 			Message: "Delivery Queue Group",
@@ -1107,7 +1151,7 @@ func (c *consumerCmd) prepareConfig(pc *fisk.ParseContext) (cfg *api.ConsumerCon
 	}
 	cfg.HeadersOnly = c.hdrsOnly
 
-	if c.backoffMode == "" {
+	if !c.acceptDefaults && c.backoffMode == "" {
 		err = c.askBackoffPolicy()
 		if err != nil {
 			return nil, err
@@ -1539,7 +1583,7 @@ func (c *consumerCmd) reportAction(_ *fisk.ParseContext) error {
 
 	table := newTableWriter(fmt.Sprintf("Consumer report for %s with %s consumers", c.stream, humanize.Comma(int64(ss.Consumers))))
 	table.AddHeaders("Consumer", "Mode", "Ack Policy", "Ack Wait", "Ack Pending", "Redelivered", "Unprocessed", "Ack Floor", "Cluster")
-	err = s.EachConsumer(func(cons *jsm.Consumer) {
+	missing, err := s.EachConsumer(func(cons *jsm.Consumer) {
 		cs, err := cons.LatestState()
 		if err != nil {
 			log.Printf("Could not obtain consumer state for %s: %s", cons.Name(), err)
@@ -1586,5 +1630,28 @@ func (c *consumerCmd) reportAction(_ *fisk.ParseContext) error {
 		renderRaftLeaders(leaders, "Consumers")
 	}
 
+	if len(missing) > 0 {
+		c.renderMissing(os.Stdout, missing)
+	}
+
 	return nil
+}
+
+func (c *consumerCmd) renderMissing(out io.Writer, missing []string) {
+	toany := func(items []string) (res []any) {
+		for _, i := range items {
+			res = append(res, any(i))
+		}
+		return res
+	}
+
+	if len(missing) > 0 {
+		fmt.Fprintln(out)
+		sort.Strings(missing)
+		table := newTableWriter("Inaccessible Consumers")
+		sliceGroups(missing, 4, func(names []string) {
+			table.AddRow(toany(names)...)
+		})
+		fmt.Fprint(out, table.Render())
+	}
 }
