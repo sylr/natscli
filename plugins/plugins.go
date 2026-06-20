@@ -145,7 +145,7 @@ func AddToApp(app *cobra.Command) error {
 		}
 
 		// the plugin file name is authoritative for the top-level command name,
-		// matching the old behaviour where the name was passed explicitly.
+		// matching the old behavior where the name was passed explicitly.
 		m.Name = strings.TrimSuffix(entry.Name(), ".json")
 
 		if m.Name == "" || m.Help == "" {

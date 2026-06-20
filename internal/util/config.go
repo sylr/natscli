@@ -90,7 +90,7 @@ func XdgShareHome() (string, error) {
 }
 
 // XdgCacheHome is where to store cache data such as shell-completion lookups.
-// It honours XDG_CACHE_HOME and otherwise falls back to ~/.cache.
+// It honors XDG_CACHE_HOME and otherwise falls back to ~/.cache.
 func XdgCacheHome() (string, error) {
 	parent := os.Getenv("XDG_CACHE_HOME")
 	if parent != "" {

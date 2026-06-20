@@ -473,7 +473,7 @@ func (c *subCmd) createJetStreamMsgHandler(subState subscriptionState, nc *nats.
 			defer func() {
 				err := m.Ack()
 				if err != nil && !subState.dump && !c.raw {
-					log.Printf("Acknowledging message via subject %s failed: %s\n", m.Reply, err)
+					log.Printf("Acknowledging message via subject %s failed: %s\n", m.Reply(), err)
 				}
 			}()
 		}

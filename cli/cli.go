@@ -168,7 +168,7 @@ func chainPersistentPreRunE(cmd *cobra.Command, prepare bool) {
 	// fisk ran PreActions additively (parent and child). cobra by default runs
 	// only the nearest PersistentPreRunE, which would let a subcommand's hook
 	// (e.g. server check's format parser) shadow the root context loader.
-	// Enabling traverse hooks restores the additive behaviour.
+	// Enabling traverse hooks restores the additive behavior.
 	cobra.EnableTraverseRunHooks = true
 
 	existing := cmd.PersistentPreRunE

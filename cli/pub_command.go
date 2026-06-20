@@ -169,7 +169,7 @@ func (c *pubCmd) writeAtomic(nc *nats.Conn) error {
 		if ack.Value != "" {
 			msg += fmt.Sprintf(" Counter Value: %s", ack.Value)
 		}
-		log.Printf(msg)
+		log.Printf("%s", msg)
 	}
 
 	return nil
@@ -315,7 +315,7 @@ func (c *pubCmd) doJetstream(nc *nats.Conn, pub *iu.Publisher) error {
 			if ack.Value != "" {
 				msg += fmt.Sprintf(" Counter Value: %s", ack.Value)
 			}
-			log.Printf(msg)
+			log.Printf("%s", msg)
 		}
 
 		// If applicable, account for the wait duration in a publish sleep.

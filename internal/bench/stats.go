@@ -112,7 +112,6 @@ func (bm *BenchmarkResults) Report() string {
 
 	if len(bm.SampleGroup.samples) == 1 {
 		buffer.WriteString(fmt.Sprintf("%s %s stats: %s\n", bm.Name, GetBenchTypeLabel(bm.BenchType), bm))
-		indent += " "
 	} else {
 		for i, stat := range bm.SampleGroup.samples {
 			buffer.WriteString(fmt.Sprintf("%s [%d] %v (%s msgs)\n", indent+" ", i+1, stat, humanize.Comma(int64(stat.jobMsgCnt))))

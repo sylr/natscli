@@ -34,7 +34,7 @@ func SetLLMExtraInformation(text string) { llmExtraInfo = text }
 // help render in markdown the same way --help-llm does.
 func llmFormatEnabled() bool { return os.Getenv("LLMFORMAT") == "1" }
 
-// SetupHelp wires the markdown/LLM help behaviour onto the root command:
+// SetupHelp wires the markdown/LLM help behavior onto the root command:
 //   - a hidden --help-llm persistent flag
 //   - a help function that renders markdown when LLMFORMAT=1
 //

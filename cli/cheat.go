@@ -55,7 +55,7 @@ func addCheat(name string, _ *cobra.Command) {
 }
 
 // configureCheatCommand attaches the "cheat" command to the root, mirroring
-// fisk's WithCheats() behaviour. The command is registered hidden to match
+// fisk's WithCheats() behavior. The command is registered hidden to match
 // main.go's previous CheatCommand.Hidden() call.
 func configureCheatCommand(root *cobra.Command) *cobra.Command {
 	var (

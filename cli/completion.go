@@ -151,7 +151,7 @@ func completionManager(cmd *cobra.Command) (*jsm.Manager, error) {
 	// The root PersistentPreRunE may run during __complete (before flags are
 	// parsed) via EnableTraverseRunHooks, caching a context built without the
 	// connection flags. Discard it and reload now that the flags are parsed.
-	// softFail=true is required so loadContext synthesises an ephemeral context
+	// softFail=true is required so loadContext synthesizes an ephemeral context
 	// from --server and the other connection flags when none is selected
 	// (loadContext(false), as used by prepareHelper, would not).
 	o := opts()

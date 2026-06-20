@@ -117,10 +117,6 @@ type existingFilesValue struct {
 	set    bool
 }
 
-func newExistingFilesValue(target *[]string) *existingFilesValue {
-	return &existingFilesValue{target: target}
-}
-
 func (f *existingFilesValue) Set(s string) error {
 	if s != "" {
 		stat, err := os.Stat(s)
