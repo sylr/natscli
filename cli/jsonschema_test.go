@@ -38,7 +38,7 @@ func validateExpectFailure(t *testing.T, cfg mockValidator) {
 
 	ok, errs := cfg.Validate(new(SchemaValidator))
 	if ok {
-		t.Fatalf("expected success but got: %v", errs)
+		t.Fatalf("expected failure but validation succeeded: %v", errs)
 	}
 }
 
@@ -114,12 +114,13 @@ func TestStreamConfiguration(t *testing.T) {
 	cfg.Storage = 10
 	validateExpectFailure(t, cfg)
 
-	// num replicas > 0
+	// num replicas: negative is invalid; 0 is valid (server treats it as the
+	// default of 1) since jsm.go PR #815 relaxed the schema minimum to 0.
 	cfg = reset()
 	cfg.Replicas = -1
 	validateExpectFailure(t, cfg)
 	cfg.Replicas = 0
-	validateExpectFailure(t, cfg)
+	validateExpectSuccess(t, cfg)
 }
 
 func TestConsumerConfiguration(t *testing.T) {
