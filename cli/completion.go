@@ -280,6 +280,13 @@ func registerFlagCompletions(cmd *cobra.Command) {
 	}
 }
 
+// completeContextNames is a cobra completion function for the --context flag. It
+// lists configured contexts from the local filesystem, so no server connection
+// or caching is involved.
+func completeContextNames(_ *cobra.Command, _ []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+	return matchCompletionPrefix(natscontext.KnownContexts(), toComplete), cobra.ShellCompDirectiveNoFileComp
+}
+
 func matchCompletionPrefix(values []string, toComplete string) []string {
 	if toComplete == "" {
 		return values

@@ -61,3 +61,12 @@ func FlagPlaceholder(cmd *cobra.Command, name string, ph string) { flagPlacehold
 
 // ConfigureCheatCommand attaches the hidden "cheat" command to root.
 func ConfigureCheatCommand(root *cobra.Command) *cobra.Command { return configureCheatCommand(root) }
+
+// RegisterContextCompletion attaches context-name completion to cmd's --context
+// flag. It must be called after the flag has been registered (e.g. for the
+// global persistent flags defined by the application entrypoint).
+func RegisterContextCompletion(cmd *cobra.Command) {
+	if cmd.Flags().Lookup("context") != nil || cmd.PersistentFlags().Lookup("context") != nil {
+		_ = cmd.RegisterFlagCompletionFunc("context", completeContextNames)
+	}
+}

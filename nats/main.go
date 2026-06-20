@@ -123,6 +123,7 @@ LLM optimized help output can be obtained using --help-llm for any command. You 
 	cli.FlagEnvVar(ncli, "colors", "NATS_COLOR")
 	cli.FlagEnvVar(ncli, "context", "NATS_CONTEXT")
 
+	cli.RegisterContextCompletion(ncli)
 	cli.ConfigureCheatCommand(ncli)
 	cli.SetupHelp(ncli)
 
