@@ -1,11 +1,15 @@
 project_name: natscli
 version: 2
 
+before:
+  hooks:
+    - go mod tidy
+
 release:
   github:
-    owner: nats-io
+    owner: sylr
     name: natscli
-  name_template: "Release {{.Version}}"
+  name_template: "Release v{{.Version}}"
   draft: true
   prerelease: auto
 
@@ -19,6 +23,13 @@ builds:
     env:
       - GO111MODULE=on
       - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X main.version=v{{.Version}}
+      - -X main.commit={{.Commit}}
+      - -X main.date={{.Date}}
     goos:
       - darwin
       - linux
@@ -44,7 +55,7 @@ builds:
         goarch: arm
 
 archives:
-  - name_template: "nats-{{.Version}}-{{.Os}}-{{.Arch}}{{if .Arm}}{{.Arm}}{{end}}"
+  - name_template: "nats-v{{.Version}}-{{.Os}}-{{.Arch}}{{if .Arm}}{{.Arm}}{{end}}"
     wrap_in_directory: true
     formats:
       - zip
@@ -56,31 +67,95 @@ checksum:
   name_template: "SHA256SUMS"
   algorithm: sha256
 
-brews:
+sboms:
+  - artifacts: archive
+
+homebrew_casks:
   - name: nats
-    directory: Formula
-    repository:
-      owner: nats-io
-      name: homebrew-nats-tools
-      token: "{{ .Env.GITHUB_APP_TOKEN }}"
-    url_template: "https://github.com/nats-io/natscli/releases/download/{{ .Tag }}/nats-{{.Version}}-{{ .Os }}-{{ .Arch }}{{if .Arm}}{{.Arm}}{{end}}.zip"
-    homepage: "https://github.com/nats-io/natscli"
+    binaries:
+      - nats
+    commit_msg_template: "Brew cask update for {{ .ProjectName }} version {{ .Tag }}"
+    directory: Casks
+    homepage: "https://github.com/sylr/natscli"
     description: "NATS utility"
     skip_upload: auto
-    test: |
-      system "#{bin}/nats --version"
-    install: |
-      bin.install "nats"
-      generate_completions_from_executable(bin/"nats", shells: [:bash, :zsh], shell_parameter_format: "--completion-script-")
+    url:
+      verified: github.com/sylr/natscli/
+    repository:
+      owner: sylr
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    hooks:
+      # postflight runs after the binary artifact is staged (see Cask::Installer). Strip quarantine,
+      # then run the same completion flow as `generate_completions_from_executable` (:cobra) so we
+      # never exec the quarantined binary during earlier artifact phases (SIGKILL / sort-order ties).
+      post:
+        install: |
+          if OS.mac?
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}"]
+            nats = staged_path.glob("nats-*/nats").first
+            nats ||= staged_path/"nats"
+            raise "nats binary not found in #{staged_path}" unless nats.exist?
+
+            executable = nats.to_s
+            %i[bash zsh fish].each do |shell|
+              env = { "SHELL" => shell.to_s }
+              param = ::Utils::ShellCompletion.completion_shell_parameter(:cobra, shell, executable, env)
+              out = ::Utils::ShellCompletion.generate_completion_output([executable], param, env)
+              path = case shell
+              when :bash
+                ::Cask::Artifact::BashCompletion.new(cask, "nats").resolve_target("nats")
+              when :zsh
+                ::Cask::Artifact::ZshCompletion.new(cask, "nats").resolve_target("nats")
+              when :fish
+                ::Cask::Artifact::FishCompletion.new(cask, "nats").resolve_target("nats")
+              end
+              path.dirname.mkpath
+              path.write(out)
+            end
+          end
+      pre:
+        uninstall: |
+          if OS.mac?
+            %i[bash zsh fish].each do |shell|
+              path = case shell
+              when :bash
+                ::Cask::Artifact::BashCompletion.new(cask, "nats").resolve_target("nats")
+              when :zsh
+                ::Cask::Artifact::ZshCompletion.new(cask, "nats").resolve_target("nats")
+              when :fish
+                ::Cask::Artifact::FishCompletion.new(cask, "nats").resolve_target("nats")
+              end
+              ::Cask::Utils.gain_permissions_remove(path) if path.exist?
+            end
+          end
 
 nfpms:
-  - file_name_template: 'nats-{{.Version}}-{{.Arch}}{{if .Arm}}{{.Arm}}{{end}}'
-    homepage:  https://nats.io
+  - file_name_template: 'nats-v{{.Version}}-{{.Arch}}{{if .Arm}}{{.Arm}}{{end}}'
+    homepage: https://nats.io
     description: NATS Utility
-    maintainer: R.I. Pienaar <rip@devco.net>
+    maintainer: Sylvain Rabot <sylvain@abstraction.fr>
     license: Apache 2.0
-    vendor: Synadia Inc.
+    vendor: Sylvain Rabot
     bindir: /usr/local/bin
     formats:
       - deb
       - rpm
+
+dockers_v2:
+  - id: nats
+    ids:
+      - nats
+    images:
+      - "ghcr.io/sylr/natscli"
+    tags:
+      - "v{{ .Version }}"
+      - latest
+    platforms:
+      - linux/amd64
+      - linux/arm64
+    dockerfile: Dockerfile
+    labels:
+      org.opencontainers.image.source: "https://github.com/sylr/natscli"
+      org.opencontainers.image.version: "v{{ .Version }}"
+      org.opencontainers.image.revision: "{{ .FullCommit }}"
