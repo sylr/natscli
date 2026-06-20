@@ -21,7 +21,7 @@ import (
 	"github.com/AlecAivazis/survey/v2"
 	"github.com/nats-io/nats-server/v2/server"
 
-	"github.com/choria-io/fisk"
+	"github.com/spf13/cobra"
 )
 
 type SrvMappingCmd struct {
@@ -30,16 +30,22 @@ type SrvMappingCmd struct {
 	subj string
 }
 
-func configureServerMappingCommand(srv *fisk.CmdClause) {
+func configureServerMappingCommand(srv *cobra.Command) {
 	c := &SrvMappingCmd{}
 
-	m := srv.Command("mappings", "Test subject mapping patterns").Alias("mapping").Action(c.mappingAction)
-	m.Arg("source", "Source subject pattern").StringVar(&c.src)
-	m.Arg("dest", "Destination subject pattern").StringVar(&c.dest)
-	m.Arg("subject", "Subject to transform").StringVar(&c.subj)
+	m := addCommand(srv, "mappings", "Test subject mapping patterns")
+	m.Aliases = []string{"mapping"}
+	m.RunE = c.mappingAction
+	addArg(m, "source", "Source subject pattern", false, "string")
+	addArg(m, "dest", "Destination subject pattern", false, "string")
+	addArg(m, "subject", "Subject to transform", false, "string")
 }
 
-func (c *SrvMappingCmd) mappingAction(_ *fisk.ParseContext) error {
+func (c *SrvMappingCmd) mappingAction(_ *cobra.Command, args []string) error {
+	c.src = argValue(args, 0)
+	c.dest = argValue(args, 1)
+	c.subj = argValue(args, 2)
+
 	if c.src == "" {
 		err := util.AskOne(&survey.Input{
 			Message: "Source subject pattern",

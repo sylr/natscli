@@ -34,7 +34,7 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 	iu "github.com/nats-io/natscli/internal/util"
 
-	"github.com/choria-io/fisk"
+	"github.com/spf13/cobra"
 )
 
 type objCommand struct {
@@ -81,84 +81,98 @@ for an indefinite period or a per-bucket configured TTL.
 
 `
 
-	obj := app.Command("object", help).Alias("obj")
+	obj := addCommand(app, "object", help)
+	obj.Aliases = []string{"obj"}
 	addCheat("obj", obj)
 
-	addCreateFlags := func(f *fisk.CmdClause, edit bool) {
-		f.Arg("bucket", "The bucket to act on").Required().StringVar(&c.bucket)
-		f.Flag("ttl", "How long to keep objects for").IsSetByUser(&c.ttlIsSetByUser).DurationVar(&c.ttl)
-		f.Flag("replicas", "How many replicas of the data to store").IsSetByUser(&c.replicasIsSetByUser).Default("1").UintVar(&c.replicas)
-		f.Flag("max-bucket-size", "Maximum size for the bucket").IsSetByUser(&c.maxBucketSizeIsSetByUser).StringVar(&c.maxBucketSizeString)
-		f.Flag("description", "A description for the bucket").IsSetByUser(&c.descriptionIsSetByUser).StringVar(&c.description)
+	addCreateFlags := func(f *cobra.Command, edit bool) {
+		f.Flags().DurationVar(&c.ttl, "ttl", 0, "How long to keep objects for")
+		f.Flags().UintVar(&c.replicas, "replicas", 1, "How many replicas of the data to store")
+		f.Flags().StringVar(&c.maxBucketSizeString, "max-bucket-size", "", "Maximum size for the bucket")
+		f.Flags().StringVar(&c.description, "description", "", "A description for the bucket")
 		if !edit {
-			f.Flag("storage", "Storage backend to use (file, memory)").EnumVar(&c.storage, "file", "f", "memory", "m")
+			f.Flags().Var(newEnumValue(&c.storage, "", "file", "f", "memory", "m"), "storage", "Storage backend to use (file, memory)")
 		}
-		f.Flag("tags", "Place the store on servers that has specific tags").IsSetByUser(&c.tagsIsSetByUser).StringsVar(&c.placementTags)
-		f.Flag("cluster", "Place the store on a specific cluster").IsSetByUser(&c.clusterIsSetByUser).StringVar(&c.placementCluster)
-		f.Flag("metadata", "Adds metadata to the bucket").IsSetByUser(&c.metadataIsSetByUser).PlaceHolder("META").StringMapVar(&c.metadata)
-		f.Flag("compress", "Compress the bucket data").IsSetByUser(&c.compressionIsSetByUser).BoolVar(&c.compression)
+		f.Flags().StringArrayVar(&c.placementTags, "tags", nil, "Place the store on servers that has specific tags")
+		f.Flags().StringVar(&c.placementCluster, "cluster", "", "Place the store on a specific cluster")
+		f.Flags().Var(newStringMapValue(&c.metadata), "metadata", "Adds metadata to the bucket")
+		flagPlaceholder(f, "metadata", "META")
+		negatableBoolVar(f, &c.compression, "compress", false, "Compress the bucket data")
 	}
 
-	add := obj.Command("add", "Adds a new Object Store Bucket").Action(c.addAction)
-	add.Tag("scope:user", "impact:rw")
+	add := addCommand(obj, "add", "Adds a new Object Store Bucket")
+	add.RunE = c.addAction
+	cmdAddTags(add, "scope:user", "impact:rw")
+	addArg(add, "bucket", "The bucket to act on", true, "string")
 	addCreateFlags(add, false)
-	add.PreAction(c.parseLimitStrings)
+	add.PreRunE = c.parseLimitStrings
 
-	edit := obj.Command("edit", "Edit an existing Object Store Bucket").Action(c.editAction)
-	edit.Tag("scope:user", "impact:rw")
+	edit := addCommand(obj, "edit", "Edit an existing Object Store Bucket")
+	edit.RunE = c.editAction
+	cmdAddTags(edit, "scope:user", "impact:rw")
+	addArg(edit, "bucket", "The bucket to act on", true, "string")
 	addCreateFlags(edit, true)
-	edit.PreAction(c.parseLimitStrings)
+	edit.PreRunE = c.parseLimitStrings
 
-	put := obj.Command("put", "Puts a file into the store").Action(c.putAction)
-	put.Tag("scope:user", "impact:rw")
-	put.Arg("bucket", "The bucket to act on").Required().StringVar(&c.bucket)
-	put.Arg("file", "The file to put").ExistingFileVar(&c.file)
-	put.Flag("name", "Override the name supplied to the object store").StringVar(&c.overrideName)
-	put.Flag("description", "Sets an optional description for the object").StringVar(&c.description)
-	put.Flag("header", "Adds headers to the object using K:V format").Short('H').StringsVar(&c.hdrs)
-	put.Flag("chunk-size", "Sets the chunk size for the file").IsSetByUser(&c.chunkSizeIsSetByUser).Uint32Var(&c.chunkSize)
-	put.Flag("progress", "Disable progress bars").Default("true").BoolVar(&c.progress)
-	put.Flag("force", "Act without confirmation").Short('f').UnNegatableBoolVar(&c.force)
+	put := addCommand(obj, "put", "Puts a file into the store")
+	put.RunE = c.putAction
+	cmdAddTags(put, "scope:user", "impact:rw")
+	addArg(put, "bucket", "The bucket to act on", true, "string")
+	addArg(put, "file", "The file to put", false, "string")
+	put.Flags().StringVar(&c.overrideName, "name", "", "Override the name supplied to the object store")
+	put.Flags().StringVar(&c.description, "description", "", "Sets an optional description for the object")
+	put.Flags().StringArrayVarP(&c.hdrs, "header", "H", nil, "Adds headers to the object using K:V format")
+	put.Flags().Uint32Var(&c.chunkSize, "chunk-size", 0, "Sets the chunk size for the file")
+	negatableBoolVar(put, &c.progress, "progress", true, "Disable progress bars")
+	put.Flags().BoolVarP(&c.force, "force", "f", false, "Act without confirmation")
 
-	del := obj.Command("del", "Deletes a file or bucket from the store").Action(c.delAction).Alias("rm")
-	del.Tag("scope:user", "impact:rw")
-	del.Arg("bucket", "The bucket to act on").Required().StringVar(&c.bucket)
-	del.Arg("file", "The file to retrieve").StringVar(&c.file)
-	del.Flag("force", "Act without confirmation").Short('f').UnNegatableBoolVar(&c.force)
+	del := addCommand(obj, "del", "Deletes a file or bucket from the store")
+	del.Aliases = []string{"rm"}
+	del.RunE = c.delAction
+	cmdAddTags(del, "scope:user", "impact:rw")
+	addArg(del, "bucket", "The bucket to act on", true, "string")
+	addArg(del, "file", "The file to retrieve", false, "string")
+	del.Flags().BoolVarP(&c.force, "force", "f", false, "Act without confirmation")
 
-	get := obj.Command("get", "Retrieves a file from the store").Action(c.getAction)
-	get.Tag("scope:user", "impact:ro")
-	get.Arg("bucket", "The bucket to act on").Required().StringVar(&c.bucket)
-	get.Arg("file", "The file to retrieve").Required().StringVar(&c.file)
-	get.Flag("output", "Override the output file name").Short('O').StringVar(&c.overrideName)
-	get.Flag("progress", "Disable progress bars").Default("true").BoolVar(&c.progress)
-	get.Flag("force", "Act without confirmation").Short('f').UnNegatableBoolVar(&c.force)
+	get := addCommand(obj, "get", "Retrieves a file from the store")
+	get.RunE = c.getAction
+	cmdAddTags(get, "scope:user", "impact:ro")
+	addArg(get, "bucket", "The bucket to act on", true, "string")
+	addArg(get, "file", "The file to retrieve", true, "string")
+	get.Flags().StringVarP(&c.overrideName, "output", "O", "", "Override the output file name")
+	negatableBoolVar(get, &c.progress, "progress", true, "Disable progress bars")
+	get.Flags().BoolVarP(&c.force, "force", "f", false, "Act without confirmation")
 
-	info := obj.Command("info", "Get information about a bucket or object").Alias("show").Alias("i").Action(c.infoAction)
-	info.Tag("scope:user", "impact:ro")
-	info.Arg("bucket", "The bucket to act on").StringVar(&c.bucket)
-	info.Arg("file", "The file to retrieve").StringVar(&c.file)
+	info := addCommand(obj, "info", "Get information about a bucket or object")
+	info.Aliases = []string{"show", "i"}
+	info.RunE = c.infoAction
+	cmdAddTags(info, "scope:user", "impact:ro")
+	addArg(info, "bucket", "The bucket to act on", false, "string")
+	addArg(info, "file", "The file to retrieve", false, "string")
 
-	ls := obj.Command("ls", "List buckets or contents of a specific bucket").Action(c.lsAction)
-	ls.Tag("scope:user", "impact:ro")
-	ls.Arg("bucket", "The bucket to act on").StringVar(&c.bucket)
-	ls.Flag("names", "When listing buckets, show just the bucket names").Short('n').UnNegatableBoolVar(&c.listNames)
+	ls := addCommand(obj, "ls", "List buckets or contents of a specific bucket")
+	ls.RunE = c.lsAction
+	cmdAddTags(ls, "scope:user", "impact:ro")
+	addArg(ls, "bucket", "The bucket to act on", false, "string")
+	ls.Flags().BoolVarP(&c.listNames, "names", "n", false, "When listing buckets, show just the bucket names")
 
-	seal := obj.Command("seal", "Seals a bucket preventing further updates").Action(c.sealAction)
-	seal.Tag("scope:user", "impact:rw")
-	seal.Arg("bucket", "The bucket to act on").Required().StringVar(&c.bucket)
-	seal.Flag("force", "Force sealing without prompting").Short('f').UnNegatableBoolVar(&c.force)
+	seal := addCommand(obj, "seal", "Seals a bucket preventing further updates")
+	seal.RunE = c.sealAction
+	cmdAddTags(seal, "scope:user", "impact:rw")
+	addArg(seal, "bucket", "The bucket to act on", true, "string")
+	seal.Flags().BoolVarP(&c.force, "force", "f", false, "Force sealing without prompting")
 
-	watch := obj.Command("watch", "Watch a bucket for changes").Action(c.watchAction)
-	watch.Tag("scope:user", "impact:ro")
-	watch.Arg("bucket", "The bucket to act on").Required().StringVar(&c.bucket)
+	watch := addCommand(obj, "watch", "Watch a bucket for changes")
+	watch.RunE = c.watchAction
+	cmdAddTags(watch, "scope:user", "impact:ro")
+	addArg(watch, "bucket", "The bucket to act on", true, "string")
 }
 
 func init() {
 	registerCommand("object", 10, configureObjectCommand)
 }
 
-func (c *objCommand) parseLimitStrings(_ *fisk.ParseContext) (err error) {
+func (c *objCommand) parseLimitStrings(_ *cobra.Command, _ []string) (err error) {
 	if c.maxBucketSizeString != "" {
 		c.maxBucketSize, err = iu.ParseStringAsBytes(c.maxBucketSizeString, 64)
 		if err != nil {
@@ -169,7 +183,9 @@ func (c *objCommand) parseLimitStrings(_ *fisk.ParseContext) (err error) {
 	return nil
 }
 
-func (c *objCommand) watchAction(_ *fisk.ParseContext) error {
+func (c *objCommand) watchAction(_ *cobra.Command, args []string) error {
+	c.bucket = args[0]
+
 	_, _, obj, err := c.loadBucket()
 	if err != nil {
 		return err
@@ -196,10 +212,12 @@ func (c *objCommand) watchAction(_ *fisk.ParseContext) error {
 	return nil
 }
 
-func (c *objCommand) sealAction(_ *fisk.ParseContext) error {
+func (c *objCommand) sealAction(_ *cobra.Command, args []string) error {
+	c.bucket = args[0]
+
 	if !c.force {
 		ok, err := askConfirmation(fmt.Sprintf("Really seal Bucket %s, sealed buckets can not be unsealed or modified", c.bucket), false)
-		fisk.FatalIfError(err, "could not obtain confirmation")
+		fatalIfError(err, "could not obtain confirmation")
 
 		if !ok {
 			return nil
@@ -221,7 +239,10 @@ func (c *objCommand) sealAction(_ *fisk.ParseContext) error {
 	return c.showBucketInfo(obj)
 }
 
-func (c *objCommand) delAction(_ *fisk.ParseContext) error {
+func (c *objCommand) delAction(_ *cobra.Command, args []string) error {
+	c.bucket = args[0]
+	c.file = argValue(args, 1)
+
 	_, _, obj, err := c.loadBucket()
 	if err != nil {
 		return err
@@ -276,7 +297,10 @@ func (c *objCommand) delAction(_ *fisk.ParseContext) error {
 	}
 }
 
-func (c *objCommand) infoAction(_ *fisk.ParseContext) error {
+func (c *objCommand) infoAction(_ *cobra.Command, args []string) error {
+	c.bucket = argValue(args, 0)
+	c.file = argValue(args, 1)
+
 	_, _, obj, err := c.loadBucket()
 	if err != nil {
 		return err
@@ -430,7 +454,9 @@ func (c *objCommand) listBuckets() error {
 	return nil
 }
 
-func (c *objCommand) lsAction(_ *fisk.ParseContext) error {
+func (c *objCommand) lsAction(_ *cobra.Command, args []string) error {
+	c.bucket = argValue(args, 0)
+
 	if c.bucket == "" {
 		return c.listBuckets()
 	}
@@ -470,7 +496,11 @@ func (c *objCommand) lsAction(_ *fisk.ParseContext) error {
 	return nil
 }
 
-func (c *objCommand) putAction(_ *fisk.ParseContext) error {
+func (c *objCommand) putAction(cmd *cobra.Command, args []string) error {
+	c.bucket = args[0]
+	c.file = argValue(args, 1)
+	c.chunkSizeIsSetByUser = cmd.Flags().Changed("chunk-size")
+
 	_, _, obj, err := c.loadBucket()
 	if err != nil {
 		return err
@@ -490,7 +520,7 @@ func (c *objCommand) putAction(_ *fisk.ParseContext) error {
 		c.showObjectInfo(nfo)
 		fmt.Println()
 		ok, err := askConfirmation(fmt.Sprintf("Replace existing file %s > %s", c.bucket, name), false)
-		fisk.FatalIfError(err, "could not obtain confirmation")
+		fatalIfError(err, "could not obtain confirmation")
 
 		if !ok {
 			return nil
@@ -571,7 +601,10 @@ func (c *objCommand) putAction(_ *fisk.ParseContext) error {
 	return nil
 }
 
-func (c *objCommand) getAction(_ *fisk.ParseContext) error {
+func (c *objCommand) getAction(_ *cobra.Command, args []string) error {
+	c.bucket = args[0]
+	c.file = args[1]
+
 	_, _, obj, err := c.loadBucket()
 	if err != nil {
 		return err
@@ -612,7 +645,7 @@ func (c *objCommand) getAction(_ *fisk.ParseContext) error {
 		_, err = os.Stat(out)
 		if !os.IsNotExist(err) {
 			ok, err := askConfirmation(fmt.Sprintf("Replace existing target file %s", out), false)
-			fisk.FatalIfError(err, "could not obtain confirmation")
+			fatalIfError(err, "could not obtain confirmation")
 
 			if !ok {
 				return nil
@@ -676,7 +709,17 @@ func (c *objCommand) getAction(_ *fisk.ParseContext) error {
 	return nil
 }
 
-func (c *objCommand) addAction(_ *fisk.ParseContext) error {
+func (c *objCommand) addAction(cmd *cobra.Command, args []string) error {
+	c.bucket = args[0]
+	c.ttlIsSetByUser = cmd.Flags().Changed("ttl")
+	c.replicasIsSetByUser = cmd.Flags().Changed("replicas")
+	c.maxBucketSizeIsSetByUser = cmd.Flags().Changed("max-bucket-size")
+	c.descriptionIsSetByUser = cmd.Flags().Changed("description")
+	c.tagsIsSetByUser = cmd.Flags().Changed("tags")
+	c.clusterIsSetByUser = cmd.Flags().Changed("cluster")
+	c.metadataIsSetByUser = cmd.Flags().Changed("metadata")
+	c.compressionIsSetByUser = cmd.Flags().Changed("compress")
+
 	_, js, err := prepareJSHelper()
 	if err != nil {
 		return err
@@ -710,7 +753,17 @@ func (c *objCommand) addAction(_ *fisk.ParseContext) error {
 	return c.showBucketInfo(obj)
 }
 
-func (c *objCommand) editAction(_ *fisk.ParseContext) error {
+func (c *objCommand) editAction(cmd *cobra.Command, args []string) error {
+	c.bucket = args[0]
+	c.ttlIsSetByUser = cmd.Flags().Changed("ttl")
+	c.replicasIsSetByUser = cmd.Flags().Changed("replicas")
+	c.maxBucketSizeIsSetByUser = cmd.Flags().Changed("max-bucket-size")
+	c.descriptionIsSetByUser = cmd.Flags().Changed("description")
+	c.tagsIsSetByUser = cmd.Flags().Changed("tags")
+	c.clusterIsSetByUser = cmd.Flags().Changed("cluster")
+	c.metadataIsSetByUser = cmd.Flags().Changed("metadata")
+	c.compressionIsSetByUser = cmd.Flags().Changed("compress")
+
 	_, js, err := prepareJSHelper()
 	if err != nil {
 		return err

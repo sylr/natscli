@@ -42,7 +42,7 @@ import (
 	"github.com/nats-io/jsm.go/balancer"
 	"github.com/nats-io/nats.go"
 
-	"github.com/choria-io/fisk"
+	"github.com/spf13/cobra"
 
 	"github.com/nats-io/jsm.go"
 )
@@ -135,231 +135,290 @@ type consumerCmd struct {
 func configureConsumerCommand(app commandHost) {
 	c := &consumerCmd{metadata: map[string]string{}}
 
-	addCreateFlags := func(f *fisk.CmdClause, edit bool) {
+	addCreateFlags := func(f *cobra.Command, edit bool) {
 		if !edit {
-			f.Flag("ack", "Acknowledgment policy (none, all, explicit, flow_control)").EnumVar(&c.ackPolicy, "none", "all", "explicit", "flow_control")
-			f.Flag("bps", "Restrict message delivery to a certain bit per second").Default("0").Uint64Var(&c.bpsRateLimit)
+			f.Flags().Var(newEnumValue(&c.ackPolicy, "", "none", "all", "explicit", "flow_control"), "ack", "Acknowledgment policy (none, all, explicit, flow_control)")
+			f.Flags().Uint64Var(&c.bpsRateLimit, "bps", 0, "Restrict message delivery to a certain bit per second")
 		}
-		f.Flag("backoff", "Creates a consumer backoff policy using a specific pre-written algorithm (none, linear)").PlaceHolder("MODE").EnumVar(&c.backoffMode, "linear", "none")
-		f.Flag("backoff-steps", "Number of steps to use when creating the backoff policy").Default("10").UintVar(&c.backoffSteps)
-		f.Flag("backoff-min", "The shortest backoff period that will be generated").Default("1m").DurationVar(&c.backoffMin)
-		f.Flag("backoff-max", "The longest backoff period that will be generated").Default("20m").DurationVar(&c.backoffMax)
+		f.Flags().Var(newEnumValue(&c.backoffMode, "", "linear", "none"), "backoff", "Creates a consumer backoff policy using a specific pre-written algorithm (none, linear)")
+		flagPlaceholder(f, "backoff", "MODE")
+		f.Flags().UintVar(&c.backoffSteps, "backoff-steps", 10, "Number of steps to use when creating the backoff policy")
+		f.Flags().DurationVar(&c.backoffMin, "backoff-min", time.Minute, "The shortest backoff period that will be generated")
+		f.Flags().DurationVar(&c.backoffMax, "backoff-max", 20*time.Minute, "The longest backoff period that will be generated")
 		if !edit {
-			f.Flag("deliver", "Start policy (all, new, last, subject, 1h, msg sequence)").PlaceHolder("POLICY").StringVar(&c.startPolicy)
-			f.Flag("deliver-group", "Delivers push messages only to subscriptions matching this group").Default("_unset_").PlaceHolder("GROUP").StringVar(&c.deliveryGroup)
+			f.Flags().StringVar(&c.startPolicy, "deliver", "", "Start policy (all, new, last, subject, 1h, msg sequence)")
+			flagPlaceholder(f, "deliver", "POLICY")
+			f.Flags().StringVar(&c.deliveryGroup, "deliver-group", "_unset_", "Delivers push messages only to subscriptions matching this group")
+			flagPlaceholder(f, "deliver-group", "GROUP")
 		}
-		f.Flag("description", "Sets a contextual description for the consumer").StringVar(&c.description)
+		f.Flags().StringVar(&c.description, "description", "", "Sets a contextual description for the consumer")
 		if !edit {
-			f.Flag("ephemeral", "Create an ephemeral consumer").UnNegatableBoolVar(&c.ephemeral)
+			f.Flags().BoolVar(&c.ephemeral, "ephemeral", false, "Create an ephemeral consumer")
 		}
-		f.Flag("filter", "Filter Stream by subjects").PlaceHolder("SUBJECTS").StringsVar(&c.filterSubjects)
+		f.Flags().StringArrayVar(&c.filterSubjects, "filter", nil, "Filter Stream by subjects")
+		flagPlaceholder(f, "filter", "SUBJECTS")
 		if !edit {
-			f.Flag("flow-control", "Enable Push consumer flow control").IsSetByUser(&c.fcSet).UnNegatableBoolVar(&c.fc)
-			f.Flag("heartbeat", "Enable idle Push consumer heartbeats (-1 disable)").StringVar(&c.idleHeartbeat)
+			f.Flags().BoolVar(&c.fc, "flow-control", false, "Enable Push consumer flow control")
+			f.Flags().StringVar(&c.idleHeartbeat, "heartbeat", "", "Enable idle Push consumer heartbeats (-1 disable)")
 		}
 
-		f.Flag("headers-only", "Deliver only headers and no bodies").IsSetByUser(&c.hdrsOnlySet).BoolVar(&c.hdrsOnly)
-		f.Flag("max-deliver", "Maximum amount of times a message will be delivered").PlaceHolder("TRIES").IntVar(&c.maxDeliver)
-		f.Flag("max-outstanding", "Maximum pending Acks before consumers stop delivering messages").Hidden().Default("-1").IntVar(&c.maxAckPending)
-		f.Flag("max-pending", "Maximum pending Acks before consumers are paused").Default("-1").IntVar(&c.maxAckPending)
+		negatableBoolVar(f, &c.hdrsOnly, "headers-only", false, "Deliver only headers and no bodies")
+		f.Flags().IntVar(&c.maxDeliver, "max-deliver", 0, "Maximum amount of times a message will be delivered")
+		flagPlaceholder(f, "max-deliver", "TRIES")
+		f.Flags().IntVar(&c.maxAckPending, "max-outstanding", -1, "Maximum pending Acks before consumers stop delivering messages")
+		_ = f.Flags().MarkHidden("max-outstanding")
+		f.Flags().IntVar(&c.maxAckPending, "max-pending", -1, "Maximum pending Acks before consumers are paused")
 		if !edit {
-			f.Flag("max-waiting", "Maximum number of outstanding pulls allowed").PlaceHolder("PULLS").IntVar(&c.maxWaiting)
+			f.Flags().IntVar(&c.maxWaiting, "max-waiting", 0, "Maximum number of outstanding pulls allowed")
+			flagPlaceholder(f, "max-waiting", "PULLS")
 		}
-		f.Flag("max-pull-batch", "Maximum size batch size for a pull request to accept").PlaceHolder("BATCH_SIZE").IntVar(&c.maxPullBatch)
-		f.Flag("max-pull-expire", "Maximum expire duration for a pull request to accept").PlaceHolder("EXPIRES").DurationVar(&c.maxPullExpire)
-		f.Flag("max-pull-bytes", "Maximum max bytes for a pull request to accept").PlaceHolder("BYTES").IntVar(&c.maxPullBytes)
+		f.Flags().IntVar(&c.maxPullBatch, "max-pull-batch", 0, "Maximum size batch size for a pull request to accept")
+		flagPlaceholder(f, "max-pull-batch", "BATCH_SIZE")
+		f.Flags().DurationVar(&c.maxPullExpire, "max-pull-expire", 0, "Maximum expire duration for a pull request to accept")
+		flagPlaceholder(f, "max-pull-expire", "EXPIRES")
+		f.Flags().IntVar(&c.maxPullBytes, "max-pull-bytes", 0, "Maximum max bytes for a pull request to accept")
+		flagPlaceholder(f, "max-pull-bytes", "BYTES")
 		if !edit {
-			f.Flag("pull", "Deliver messages in 'pull' mode").UnNegatableBoolVar(&c.pull)
-			f.Flag("replay", "Replay Policy (instant, original)").PlaceHolder("POLICY").EnumVar(&c.replayPolicy, "instant", "original")
+			f.Flags().BoolVar(&c.pull, "pull", false, "Deliver messages in 'pull' mode")
+			f.Flags().Var(newEnumValue(&c.replayPolicy, "", "instant", "original"), "replay", "Replay Policy (instant, original)")
+			flagPlaceholder(f, "replay", "POLICY")
 		}
-		f.Flag("sample", "Percentage of requests to sample for monitoring purposes").Default("-1").IntVar(&c.samplePct)
-		f.Flag("target", "Push based delivery target subject").PlaceHolder("SUBJECT").StringVar(&c.delivery)
-		f.Flag("wait", "Acknowledgment waiting time").Default("-1s").DurationVar(&c.ackWait)
-		f.Flag("inactive-threshold", "How long to allow an ephemeral consumer to be idle before removing it").PlaceHolder("THRESHOLD").DurationVar(&c.inactiveThreshold)
+		f.Flags().IntVar(&c.samplePct, "sample", -1, "Percentage of requests to sample for monitoring purposes")
+		f.Flags().StringVar(&c.delivery, "target", "", "Push based delivery target subject")
+		flagPlaceholder(f, "target", "SUBJECT")
+		f.Flags().DurationVar(&c.ackWait, "wait", -1*time.Second, "Acknowledgment waiting time")
+		f.Flags().DurationVar(&c.inactiveThreshold, "inactive-threshold", 0, "How long to allow an ephemeral consumer to be idle before removing it")
+		flagPlaceholder(f, "inactive-threshold", "THRESHOLD")
 		if !edit {
-			f.Flag("memory", "Force the consumer state to be stored in memory rather than inherit from the stream").UnNegatableBoolVar(&c.memory)
+			f.Flags().BoolVar(&c.memory, "memory", false, "Force the consumer state to be stored in memory rather than inherit from the stream")
 		}
-		f.Flag("replicas", "Sets a custom replica count rather than inherit from the stream").IntVar(&c.replicas)
-		f.Flag("metadata", "Adds metadata to the consumer").PlaceHolder("META").IsSetByUser(&c.metadataIsSet).StringMapVar(&c.metadata)
+		f.Flags().IntVar(&c.replicas, "replicas", 0, "Sets a custom replica count rather than inherit from the stream")
+		f.Flags().Var(newStringMapValue(&c.metadata), "metadata", "Adds metadata to the consumer")
+		flagPlaceholder(f, "metadata", "META")
 		if !edit {
-			f.Flag("pause", fmt.Sprintf("Pause the consumer for a duration after start or until a specific timestamp (eg %s)", time.Now().Format(time.DateTime))).StringVar(&c.pauseUntil)
-			f.Flag("pinned-groups", "Create a Pinned Client consumer based on these groups").PlaceHolder("GROUPS").StringsVar(&c.pinnedGroups)
-			f.Flag("pinned-ttl", "The time to allow for a client to pull before losing the pinned status").PlaceHolder("TTL").DurationVar(&c.pinnedTTL)
-			f.Flag("overflow-groups", "Create a Overflow consumer based on these groups").PlaceHolder("GROUPS").StringsVar(&c.overflowGroups)
-			f.Flag("prioritized-groups", "Create a Prioritized consumer based on these groups").PlaceHolder("GROUPS").StringsVar(&c.prioritizedGroups)
+			f.Flags().StringVar(&c.pauseUntil, "pause", "", fmt.Sprintf("Pause the consumer for a duration after start or until a specific timestamp (eg %s)", time.Now().Format(time.DateTime)))
+			f.Flags().StringArrayVar(&c.pinnedGroups, "pinned-groups", nil, "Create a Pinned Client consumer based on these groups")
+			flagPlaceholder(f, "pinned-groups", "GROUPS")
+			f.Flags().DurationVar(&c.pinnedTTL, "pinned-ttl", 0, "The time to allow for a client to pull before losing the pinned status")
+			flagPlaceholder(f, "pinned-ttl", "TTL")
+			f.Flags().StringArrayVar(&c.overflowGroups, "overflow-groups", nil, "Create a Overflow consumer based on these groups")
+			flagPlaceholder(f, "overflow-groups", "GROUPS")
+			f.Flags().StringArrayVar(&c.prioritizedGroups, "prioritized-groups", nil, "Create a Prioritized consumer based on these groups")
+			flagPlaceholder(f, "prioritized-groups", "GROUPS")
 		}
 	}
 
-	cons := app.Command("consumer", "JetStream consumer management").Alias("con").Alias("obs").Alias("c")
+	cons := addCommand(app, "consumer", "JetStream consumer management")
+	cons.Aliases = []string{"con", "obs", "c"}
 	addCheat("consumer", cons)
-	cons.Flag("all", "Operate on all streams including system ones").Short('a').UnNegatableBoolVar(&c.showAll)
+	cons.Flags().BoolVarP(&c.showAll, "all", "a", false, "Operate on all streams including system ones")
 
-	consAdd := cons.Command("add", "Creates a new consumer").Alias("create").Alias("new").Action(c.createAction)
-	consAdd.Tag("scope:user", "impact:rw")
-	consAdd.Arg("stream", "Stream name").StringVar(&c.stream)
-	consAdd.Arg("consumer", "Consumer name").StringVar(&c.consumer)
-	consAdd.Flag("config", "JSON file to read configuration from").ExistingFileVar(&c.inputFile)
-	consAdd.Flag("validate", "Only validates the configuration against the official Schema").UnNegatableBoolVar(&c.validateOnly)
-	consAdd.Flag("output", "Save configuration instead of creating").PlaceHolder("FILE").StringVar(&c.outFile)
+	consAdd := addCommand(cons, "add", "Creates a new consumer")
+	consAdd.Aliases = []string{"create", "new"}
+	consAdd.RunE = c.createAction
+	cmdAddTags(consAdd, "scope:user", "impact:rw")
+	addArg(consAdd, "stream", "Stream name", false, "string")
+	addArg(consAdd, "consumer", "Consumer name", false, "string")
+	consAdd.Flags().Var(newExistingFileValue(&c.inputFile), "config", "JSON file to read configuration from")
+	consAdd.Flags().BoolVar(&c.validateOnly, "validate", false, "Only validates the configuration against the official Schema")
+	consAdd.Flags().StringVar(&c.outFile, "output", "", "Save configuration instead of creating")
+	flagPlaceholder(consAdd, "output", "FILE")
 	addCreateFlags(consAdd, false)
-	consAdd.Flag("defaults", "Accept default values for all prompts").UnNegatableBoolVar(&c.acceptDefaults)
+	consAdd.Flags().BoolVar(&c.acceptDefaults, "defaults", false, "Accept default values for all prompts")
 
-	edit := cons.Command("edit", "Edits the configuration of a consumer").Alias("update").Action(c.editAction)
-	edit.Tag("scope:user", "impact:rw")
-	edit.Arg("stream", "Stream name").StringVar(&c.stream)
-	edit.Arg("consumer", "Consumer name").StringVar(&c.consumer)
-	edit.Flag("config", "JSON file to read configuration from").ExistingFileVar(&c.inputFile)
-	edit.Flag("force", "Force removal without prompting").Short('f').UnNegatableBoolVar(&c.force)
-	edit.Flag("interactive", "Edit the configuring using your editor").Short('i').BoolVar(&c.interactive)
-	edit.Flag("dry-run", "Only shows differences, do not edit the stream").UnNegatableBoolVar(&c.dryRun)
+	edit := addCommand(cons, "edit", "Edits the configuration of a consumer")
+	edit.Aliases = []string{"update"}
+	edit.RunE = c.editAction
+	cmdAddTags(edit, "scope:user", "impact:rw")
+	addArg(edit, "stream", "Stream name", false, "string")
+	addArg(edit, "consumer", "Consumer name", false, "string")
+	edit.Flags().Var(newExistingFileValue(&c.inputFile), "config", "JSON file to read configuration from")
+	edit.Flags().BoolVarP(&c.force, "force", "f", false, "Force removal without prompting")
+	negatableBoolVarP(edit, &c.interactive, "interactive", "i", false, "Edit the configuring using your editor")
+	edit.Flags().BoolVar(&c.dryRun, "dry-run", false, "Only shows differences, do not edit the stream")
 	addCreateFlags(edit, true)
 
-	consLs := cons.Command("ls", "List known consumers").Alias("list").Action(c.lsAction)
-	consLs.Tag("scope:user", "impact:ro")
-	consLs.Arg("stream", "Stream name").StringVar(&c.stream)
-	consLs.Flag("json", "Produce JSON output").Short('j').UnNegatableBoolVar(&c.json)
-	consLs.Flag("names", "Show just the consumer names").Short('n').UnNegatableBoolVar(&c.listNames)
-	consLs.Flag("no-select", "Do not select consumers from a list").Default("false").UnNegatableBoolVar(&c.force)
+	consLs := addCommand(cons, "ls", "List known consumers")
+	consLs.Aliases = []string{"list"}
+	consLs.RunE = c.lsAction
+	cmdAddTags(consLs, "scope:user", "impact:ro")
+	addArg(consLs, "stream", "Stream name", false, "string")
+	consLs.Flags().BoolVarP(&c.json, "json", "j", false, "Produce JSON output")
+	consLs.Flags().BoolVarP(&c.listNames, "names", "n", false, "Show just the consumer names")
+	consLs.Flags().BoolVar(&c.force, "no-select", false, "Do not select consumers from a list")
 
-	consFind := cons.Command("find", "Finds consumers matching certain criteria").Alias("query").Action(c.findAction)
-	consFind.Tag("scope:user", "impact:ro")
-	consFind.Arg("stream", "Stream name").StringVar(&c.stream)
-	consFind.Flag("pull", "Display only pull based consumers").UnNegatableBoolVar(&c.fPull)
-	consFind.Flag("push", "Display only push based consumers").UnNegatableBoolVar(&c.fPush)
-	consFind.Flag("bound", "Display push-bound or pull consumers with waiting pulls").UnNegatableBoolVar(&c.fBound)
-	consFind.Flag("waiting", "Display consumers with fewer waiting pulls").IntVar(&c.fWaiting)
-	consFind.Flag("ack-pending", "Display consumers with fewer pending acks").IntVar(&c.fAckPending)
-	consFind.Flag("pending", "Display consumers with fewer unprocessed messages").Uint64Var(&c.fPending)
-	consFind.Flag("idle", "Display consumers with no new deliveries for a period").DurationVar(&c.fIdle)
-	consFind.Flag("created", "Display consumers created longer ago than duration").PlaceHolder("DURATION").DurationVar(&c.fCreated)
-	consFind.Flag("replicas", "Display consumers with fewer or equal replicas than the value").PlaceHolder("REPLICAS").UintVar(&c.fReplicas)
-	consFind.Flag("leader", "Display only clustered streams with a specific leader").PlaceHolder("SERVER").StringVar(&c.fLeader)
-	consFind.Flag("pinned", "Finds Pinned Client priority group consumers that are fully pinned").UnNegatableBoolVar(&c.fPinned)
-	consFind.Flag("invert", "Invert the check - before becomes after, with becomes without").BoolVar(&c.fInvert)
-	consFind.Flag("expression", "Match consumers using an expression language").StringVar(&c.fExpression)
-	consFind.Flag("api-level", "Match consumers that support at least the given api level").IntVar(&c.apiLevel)
+	consFind := addCommand(cons, "find", "Finds consumers matching certain criteria")
+	consFind.Aliases = []string{"query"}
+	consFind.RunE = c.findAction
+	cmdAddTags(consFind, "scope:user", "impact:ro")
+	addArg(consFind, "stream", "Stream name", false, "string")
+	consFind.Flags().BoolVar(&c.fPull, "pull", false, "Display only pull based consumers")
+	consFind.Flags().BoolVar(&c.fPush, "push", false, "Display only push based consumers")
+	consFind.Flags().BoolVar(&c.fBound, "bound", false, "Display push-bound or pull consumers with waiting pulls")
+	consFind.Flags().IntVar(&c.fWaiting, "waiting", 0, "Display consumers with fewer waiting pulls")
+	consFind.Flags().IntVar(&c.fAckPending, "ack-pending", 0, "Display consumers with fewer pending acks")
+	consFind.Flags().Uint64Var(&c.fPending, "pending", 0, "Display consumers with fewer unprocessed messages")
+	consFind.Flags().DurationVar(&c.fIdle, "idle", 0, "Display consumers with no new deliveries for a period")
+	consFind.Flags().DurationVar(&c.fCreated, "created", 0, "Display consumers created longer ago than duration")
+	flagPlaceholder(consFind, "created", "DURATION")
+	consFind.Flags().UintVar(&c.fReplicas, "replicas", 0, "Display consumers with fewer or equal replicas than the value")
+	flagPlaceholder(consFind, "replicas", "REPLICAS")
+	consFind.Flags().StringVar(&c.fLeader, "leader", "", "Display only clustered streams with a specific leader")
+	flagPlaceholder(consFind, "leader", "SERVER")
+	consFind.Flags().BoolVar(&c.fPinned, "pinned", false, "Finds Pinned Client priority group consumers that are fully pinned")
+	negatableBoolVar(consFind, &c.fInvert, "invert", false, "Invert the check - before becomes after, with becomes without")
+	consFind.Flags().StringVar(&c.fExpression, "expression", "", "Match consumers using an expression language")
+	consFind.Flags().IntVar(&c.apiLevel, "api-level", 0, "Match consumers that support at least the given api level")
 
-	consInfo := cons.Command("info", "Consumer information").Alias("nfo").Action(c.infoAction)
-	consInfo.Tag("scope:user", "impact:ro")
-	consInfo.Arg("stream", "Stream name").StringVar(&c.stream)
-	consInfo.Arg("consumer", "Consumer name").StringVar(&c.consumer)
-	consInfo.Flag("json", "Produce JSON output").Short('j').UnNegatableBoolVar(&c.json)
-	consInfo.Flag("no-select", "Do not select consumers from a list").Default("false").UnNegatableBoolVar(&c.force)
+	consInfo := addCommand(cons, "info", "Consumer information")
+	consInfo.Aliases = []string{"nfo"}
+	consInfo.RunE = c.infoAction
+	cmdAddTags(consInfo, "scope:user", "impact:ro")
+	addArg(consInfo, "stream", "Stream name", false, "string")
+	addArg(consInfo, "consumer", "Consumer name", false, "string")
+	consInfo.Flags().BoolVarP(&c.json, "json", "j", false, "Produce JSON output")
+	consInfo.Flags().BoolVar(&c.force, "no-select", false, "Do not select consumers from a list")
 
-	consState := cons.Command("state", "Consumer state").Action(c.stateAction)
-	consState.Tag("scope:user", "impact:ro")
-	consState.Arg("stream", "Stream to retrieve state information for").StringVar(&c.stream)
-	consState.Arg("consumer", "Consumer name").StringVar(&c.consumer)
-	consState.Flag("json", "Produce JSON output").Short('j').UnNegatableBoolVar(&c.json)
-	consState.Flag("no-select", "Do not select streams from a list").Default("false").UnNegatableBoolVar(&c.force)
+	consState := addCommand(cons, "state", "Consumer state")
+	consState.RunE = c.stateAction
+	cmdAddTags(consState, "scope:user", "impact:ro")
+	addArg(consState, "stream", "Stream to retrieve state information for", false, "string")
+	addArg(consState, "consumer", "Consumer name", false, "string")
+	consState.Flags().BoolVarP(&c.json, "json", "j", false, "Produce JSON output")
+	consState.Flags().BoolVar(&c.force, "no-select", false, "Do not select streams from a list")
 
-	consRm := cons.Command("rm", "Removes a consumer").Alias("delete").Alias("del").Action(c.rmAction)
-	consRm.Tag("scope:user", "impact:rw")
-	consRm.Arg("stream", "Stream name").StringVar(&c.stream)
-	consRm.Arg("consumer", "Consumer name").StringVar(&c.consumer)
-	consRm.Flag("force", "Force removal without prompting").Short('f').UnNegatableBoolVar(&c.force)
+	consRm := addCommand(cons, "rm", "Removes a consumer")
+	consRm.Aliases = []string{"delete", "del"}
+	consRm.RunE = c.rmAction
+	cmdAddTags(consRm, "scope:user", "impact:rw")
+	addArg(consRm, "stream", "Stream name", false, "string")
+	addArg(consRm, "consumer", "Consumer name", false, "string")
+	consRm.Flags().BoolVarP(&c.force, "force", "f", false, "Force removal without prompting")
 
-	consReset := cons.Command("reset", "Resets the consumer to a previous state").Action(c.resetAction)
-	consReset.Tag("scope:user", "impact:rw")
-	consReset.Arg("stream", "Stream name").StringVar(&c.stream)
-	consReset.Arg("consumer", "Consumer name").StringVar(&c.consumer)
-	consReset.Flag("sequence", "Sequence to reset to").IsSetByUser(&c.resetSeqIsSet).Uint64Var(&c.resetSeq)
-	consReset.Flag("force", "Force reset without prompting").Short('f').UnNegatableBoolVar(&c.force)
+	consReset := addCommand(cons, "reset", "Resets the consumer to a previous state")
+	consReset.RunE = c.resetAction
+	cmdAddTags(consReset, "scope:user", "impact:rw")
+	addArg(consReset, "stream", "Stream name", false, "string")
+	addArg(consReset, "consumer", "Consumer name", false, "string")
+	consReset.Flags().Uint64Var(&c.resetSeq, "sequence", 0, "Sequence to reset to")
+	consReset.Flags().BoolVarP(&c.force, "force", "f", false, "Force reset without prompting")
 
-	consCp := cons.Command("copy", "Creates a new consumer based on the configuration of another").Alias("cp").Action(c.cpAction)
-	consCp.Tag("scope:user", "impact:rw")
-	consCp.Arg("stream", "Stream name").Required().StringVar(&c.stream)
-	consCp.Arg("source", "Source consumer name").Required().StringVar(&c.consumer)
-	consCp.Arg("destination", "Destination consumer name").Required().StringVar(&c.destination)
+	consCp := addCommand(cons, "copy", "Creates a new consumer based on the configuration of another")
+	consCp.Aliases = []string{"cp"}
+	consCp.RunE = c.cpAction
+	cmdAddTags(consCp, "scope:user", "impact:rw")
+	addArg(consCp, "stream", "Stream name", true, "string")
+	addArg(consCp, "source", "Source consumer name", true, "string")
+	addArg(consCp, "destination", "Destination consumer name", true, "string")
 	addCreateFlags(consCp, false)
 
-	consNext := cons.Command("next", "Retrieves messages from Pull consumers without interactive prompts").Action(c.nextAction)
-	consNext.Tag("scope:user", "impact:ro")
-	consNext.Arg("stream", "Stream name").Required().StringVar(&c.stream)
-	consNext.Arg("consumer", "Consumer name").Required().StringVar(&c.consumer)
-	consNext.Flag("ack", "Acknowledge received message").Default("true").IsSetByUser(&c.ackSetByUser).BoolVar(&c.ack)
-	consNext.Flag("nak", "Perform a Negative Acknowledgement on the message").UnNegatableBoolVar(&c.nak)
-	consNext.Flag("term", "Terms the message").Default("false").UnNegatableBoolVar(&c.term)
-	consNext.Flag("raw", "Show only the message").Short('r').UnNegatableBoolVar(&c.raw)
-	consNext.Flag("wait", "Wait up to this period to acknowledge messages").DurationVar(&c.ackWait)
-	consNext.Flag("count", "Number of messages to try to fetch from the pull consumer").Default("1").IntVar(&c.pullCount)
+	consNext := addCommand(cons, "next", "Retrieves messages from Pull consumers without interactive prompts")
+	consNext.RunE = c.nextAction
+	cmdAddTags(consNext, "scope:user", "impact:ro")
+	addArg(consNext, "stream", "Stream name", true, "string")
+	addArg(consNext, "consumer", "Consumer name", true, "string")
+	negatableBoolVar(consNext, &c.ack, "ack", true, "Acknowledge received message")
+	consNext.Flags().BoolVar(&c.nak, "nak", false, "Perform a Negative Acknowledgement on the message")
+	consNext.Flags().BoolVar(&c.term, "term", false, "Terms the message")
+	consNext.Flags().BoolVarP(&c.raw, "raw", "r", false, "Show only the message")
+	consNext.Flags().DurationVar(&c.ackWait, "wait", 0, "Wait up to this period to acknowledge messages")
+	consNext.Flags().IntVar(&c.pullCount, "count", 1, "Number of messages to try to fetch from the pull consumer")
 
-	consSub := cons.Command("sub", "Retrieves messages from consumers").Action(c.subAction).Hidden()
-	consSub.Tag("scope:user", "impact:ro")
-	consSub.Arg("stream", "Stream name").StringVar(&c.stream)
-	consSub.Arg("consumer", "Consumer name").StringVar(&c.consumer)
-	consSub.Flag("ack", "Acknowledge received message").Default("true").BoolVar(&c.ack)
-	consSub.Flag("raw", "Show only the message").Short('r').UnNegatableBoolVar(&c.raw)
-	consSub.Flag("deliver-group", "Deliver group of the consumer").StringVar(&c.deliveryGroup)
+	consSub := addCommand(cons, "sub", "Retrieves messages from consumers")
+	consSub.RunE = c.subAction
+	consSub.Hidden = true
+	cmdAddTags(consSub, "scope:user", "impact:ro")
+	addArg(consSub, "stream", "Stream name", false, "string")
+	addArg(consSub, "consumer", "Consumer name", false, "string")
+	negatableBoolVar(consSub, &c.ack, "ack", true, "Acknowledge received message")
+	consSub.Flags().BoolVarP(&c.raw, "raw", "r", false, "Show only the message")
+	consSub.Flags().StringVar(&c.deliveryGroup, "deliver-group", "", "Deliver group of the consumer")
 
-	graph := cons.Command("graph", "View a graph of consumer activity").Action(c.graphAction)
-	graph.Tag("scope:user", "impact:ro")
-	graph.Arg("stream", "Stream name").StringVar(&c.stream)
-	graph.Arg("consumer", "Consumer name").StringVar(&c.consumer)
+	graph := addCommand(cons, "graph", "View a graph of consumer activity")
+	graph.RunE = c.graphAction
+	cmdAddTags(graph, "scope:user", "impact:ro")
+	addArg(graph, "stream", "Stream name", false, "string")
+	addArg(graph, "consumer", "Consumer name", false, "string")
 
-	conPause := cons.Command("pause", "Pause a consumer until a later time").Action(c.pauseAction)
-	conPause.Tag("scope:user", "impact:rw")
-	conPause.Arg("stream", "Stream name").StringVar(&c.stream)
-	conPause.Arg("consumer", "Consumer name").StringVar(&c.consumer)
-	conPause.Arg("until", fmt.Sprintf("Pause until a specific time (eg %s)", time.Now().UTC().Format(time.DateTime))).PlaceHolder("TIME").StringVar(&c.pauseUntil)
-	conPause.Flag("force", "Force pause without prompting").Short('f').UnNegatableBoolVar(&c.force)
+	conPause := addCommand(cons, "pause", "Pause a consumer until a later time")
+	conPause.RunE = c.pauseAction
+	cmdAddTags(conPause, "scope:user", "impact:rw")
+	addArg(conPause, "stream", "Stream name", false, "string")
+	addArg(conPause, "consumer", "Consumer name", false, "string")
+	addArg(conPause, "until", fmt.Sprintf("Pause until a specific time (eg %s)", time.Now().UTC().Format(time.DateTime)), false, "string")
+	flagPlaceholder(conPause, "until", "TIME")
+	conPause.Flags().BoolVarP(&c.force, "force", "f", false, "Force pause without prompting")
 
-	conUnpin := cons.Command("unpin", "Unpin the current Pinned Client from a Priority Group").Action(c.unpinAction)
-	conUnpin.Tag("scope:user", "impact:rw")
-	conUnpin.Arg("stream", "Stream name").StringVar(&c.stream)
-	conUnpin.Arg("consumer", "Consumer name").StringVar(&c.consumer)
-	conUnpin.Arg("group", "The group to unpin").StringVar(&c.groupName)
-	conUnpin.Flag("force", "Force unpin without prompting").Short('f').UnNegatableBoolVar(&c.force)
+	conUnpin := addCommand(cons, "unpin", "Unpin the current Pinned Client from a Priority Group")
+	conUnpin.RunE = c.unpinAction
+	cmdAddTags(conUnpin, "scope:user", "impact:rw")
+	addArg(conUnpin, "stream", "Stream name", false, "string")
+	addArg(conUnpin, "consumer", "Consumer name", false, "string")
+	addArg(conUnpin, "group", "The group to unpin", false, "string")
+	conUnpin.Flags().BoolVarP(&c.force, "force", "f", false, "Force unpin without prompting")
 
-	conResume := cons.Command("resume", "Resume a paused consumer").Action(c.resumeAction)
-	conResume.Tag("scope:user", "impact:rw")
-	conResume.Arg("stream", "Stream name").StringVar(&c.stream)
-	conResume.Arg("consumer", "Consumer name").StringVar(&c.consumer)
-	conResume.Flag("force", "Force resume without prompting").Short('f').UnNegatableBoolVar(&c.force)
+	conResume := addCommand(cons, "resume", "Resume a paused consumer")
+	conResume.RunE = c.resumeAction
+	cmdAddTags(conResume, "scope:user", "impact:rw")
+	addArg(conResume, "stream", "Stream name", false, "string")
+	addArg(conResume, "consumer", "Consumer name", false, "string")
+	conResume.Flags().BoolVarP(&c.force, "force", "f", false, "Force resume without prompting")
 
-	conReport := cons.Command("report", "Reports on consumer statistics").Action(c.reportAction)
-	conReport.Tag("scope:user", "impact:ro")
-	conReport.Arg("stream", "Stream name").StringVar(&c.stream)
-	conReport.Flag("raw", "Show un-formatted numbers").Short('r').UnNegatableBoolVar(&c.raw)
-	conReport.Flag("leaders", "Show details about the leaders").Short('l').UnNegatableBoolVar(&c.reportLeaderDistrib)
+	conReport := addCommand(cons, "report", "Reports on consumer statistics")
+	conReport.RunE = c.reportAction
+	cmdAddTags(conReport, "scope:user", "impact:ro")
+	addArg(conReport, "stream", "Stream name", false, "string")
+	conReport.Flags().BoolVarP(&c.raw, "raw", "r", false, "Show un-formatted numbers")
+	conReport.Flags().BoolVarP(&c.reportLeaderDistrib, "leaders", "l", false, "Show details about the leaders")
 
-	conCluster := cons.Command("cluster", "Manages a clustered consumer").Alias("c")
+	conCluster := addCommand(cons, "cluster", "Manages a clustered consumer")
+	conCluster.Aliases = []string{"c"}
 
-	conClusterDown := conCluster.Command("step-down", "Force a new leader election by standing down the current leader").Alias("elect").Alias("down").Alias("d").Action(c.leaderStandDownAction)
-	conClusterDown.Tag("scope:user", "impact:rw")
-	conClusterDown.Arg("stream", "Stream to act on").StringVar(&c.stream)
-	conClusterDown.Arg("consumer", "Consumer to act on").StringVar(&c.consumer)
-	conClusterDown.Flag("preferred", "Prefer placing the leader on a specific host").StringVar(&c.placementPreferred)
-	conClusterDown.Flag("force", "Force leader step down ignoring current leader").Short('f').UnNegatableBoolVar(&c.force)
+	conClusterDown := addCommand(conCluster, "step-down", "Force a new leader election by standing down the current leader")
+	conClusterDown.Aliases = []string{"elect", "down", "d"}
+	conClusterDown.RunE = c.leaderStandDownAction
+	cmdAddTags(conClusterDown, "scope:user", "impact:rw")
+	addArg(conClusterDown, "stream", "Stream to act on", false, "string")
+	addArg(conClusterDown, "consumer", "Consumer to act on", false, "string")
+	conClusterDown.Flags().StringVar(&c.placementPreferred, "preferred", "", "Prefer placing the leader on a specific host")
+	conClusterDown.Flags().BoolVarP(&c.force, "force", "f", false, "Force leader step down ignoring current leader")
 
-	conClusterBalance := conCluster.Command("balance", "Balance consumer leaders").Action(c.balanceAction)
-	conClusterBalance.Tag("scope:user", "impact:rw")
-	conClusterBalance.Arg("stream", "Stream to act on").StringVar(&c.stream)
-	conClusterBalance.Flag("pull", "Balance only pull based consumers").UnNegatableBoolVar(&c.fPull)
-	conClusterBalance.Flag("push", "Balance only push based consumers").UnNegatableBoolVar(&c.fPush)
-	conClusterBalance.Flag("bound", "Balance push-bound or pull consumers with waiting pulls").UnNegatableBoolVar(&c.fBound)
-	conClusterBalance.Flag("waiting", "Balance consumers with fewer waiting pulls").IntVar(&c.fWaiting)
-	conClusterBalance.Flag("ack-pending", "Balance consumers with fewer pending acks").IntVar(&c.fAckPending)
-	conClusterBalance.Flag("pending", "Balance consumers with fewer unprocessed messages").Uint64Var(&c.fPending)
-	conClusterBalance.Flag("idle", "Balance consumers with no new deliveries for a period").DurationVar(&c.fIdle)
-	conClusterBalance.Flag("created", "Balance consumers created longer ago than duration").PlaceHolder("DURATION").DurationVar(&c.fCreated)
-	conClusterBalance.Flag("replicas", "Balance consumers with fewer or equal replicas than the value").PlaceHolder("REPLICAS").UintVar(&c.fReplicas)
-	conClusterBalance.Flag("leader", "Balance only clustered streams with a specific leader").PlaceHolder("SERVER").StringVar(&c.fLeader)
-	conClusterBalance.Flag("pinned", "Balance Pinned Client priority group consumers that are fully pinned").UnNegatableBoolVar(&c.fPinned)
-	conClusterBalance.Flag("invert", "Invert the check - before becomes after, with becomes without").BoolVar(&c.fInvert)
-	conClusterBalance.Flag("expression", "Balance matching consumers using an expression language").StringVar(&c.fExpression)
+	conClusterBalance := addCommand(conCluster, "balance", "Balance consumer leaders")
+	conClusterBalance.RunE = c.balanceAction
+	cmdAddTags(conClusterBalance, "scope:user", "impact:rw")
+	addArg(conClusterBalance, "stream", "Stream to act on", false, "string")
+	conClusterBalance.Flags().BoolVar(&c.fPull, "pull", false, "Balance only pull based consumers")
+	conClusterBalance.Flags().BoolVar(&c.fPush, "push", false, "Balance only push based consumers")
+	conClusterBalance.Flags().BoolVar(&c.fBound, "bound", false, "Balance push-bound or pull consumers with waiting pulls")
+	conClusterBalance.Flags().IntVar(&c.fWaiting, "waiting", 0, "Balance consumers with fewer waiting pulls")
+	conClusterBalance.Flags().IntVar(&c.fAckPending, "ack-pending", 0, "Balance consumers with fewer pending acks")
+	conClusterBalance.Flags().Uint64Var(&c.fPending, "pending", 0, "Balance consumers with fewer unprocessed messages")
+	conClusterBalance.Flags().DurationVar(&c.fIdle, "idle", 0, "Balance consumers with no new deliveries for a period")
+	conClusterBalance.Flags().DurationVar(&c.fCreated, "created", 0, "Balance consumers created longer ago than duration")
+	flagPlaceholder(conClusterBalance, "created", "DURATION")
+	conClusterBalance.Flags().UintVar(&c.fReplicas, "replicas", 0, "Balance consumers with fewer or equal replicas than the value")
+	flagPlaceholder(conClusterBalance, "replicas", "REPLICAS")
+	conClusterBalance.Flags().StringVar(&c.fLeader, "leader", "", "Balance only clustered streams with a specific leader")
+	flagPlaceholder(conClusterBalance, "leader", "SERVER")
+	conClusterBalance.Flags().BoolVar(&c.fPinned, "pinned", false, "Balance Pinned Client priority group consumers that are fully pinned")
+	negatableBoolVar(conClusterBalance, &c.fInvert, "invert", false, "Invert the check - before becomes after, with becomes without")
+	conClusterBalance.Flags().StringVar(&c.fExpression, "expression", "", "Balance matching consumers using an expression language")
 }
 
 func init() {
 	registerCommand("consumer", 4, configureConsumerCommand)
 }
 
-func (c *consumerCmd) resetAction(_ *fisk.ParseContext) error {
+func (c *consumerCmd) resetAction(cmd *cobra.Command, args []string) error {
+	c.stream = argValue(args, 0)
+	c.consumer = argValue(args, 1)
+	c.resetSeqIsSet = cmd.Flags().Changed("sequence")
+
 	c.connectAndSetup(true, true)
 
 	if !c.force {
 		ok, err := askConfirmation("Really reset the consumer", false)
-		fisk.FatalIfError(err, "could not obtain confirmation")
+		fatalIfError(err, "could not obtain confirmation")
 
 		if !ok {
 			return nil
@@ -377,7 +436,11 @@ func (c *consumerCmd) resetAction(_ *fisk.ParseContext) error {
 	return nil
 }
 
-func (c *consumerCmd) unpinAction(_ *fisk.ParseContext) error {
+func (c *consumerCmd) unpinAction(_ *cobra.Command, args []string) error {
+	c.stream = argValue(args, 0)
+	c.consumer = argValue(args, 1)
+	c.groupName = argValue(args, 2)
+
 	c.connectAndSetup(true, true)
 
 	if !c.selectedConsumer.IsPinnedClientPriority() {
@@ -415,7 +478,7 @@ func (c *consumerCmd) unpinAction(_ *fisk.ParseContext) error {
 
 	if !c.force {
 		ok, err := askConfirmation(fmt.Sprintf("Really unpin client from group %s > %s > %s", c.stream, c.consumer, c.groupName), false)
-		fisk.FatalIfError(err, "could not obtain confirmation")
+		fatalIfError(err, "could not obtain confirmation")
 
 		if !ok {
 			return nil
@@ -432,7 +495,9 @@ func (c *consumerCmd) unpinAction(_ *fisk.ParseContext) error {
 	return nil
 }
 
-func (c *consumerCmd) findAction(_ *fisk.ParseContext) error {
+func (c *consumerCmd) findAction(_ *cobra.Command, args []string) error {
+	c.stream = argValue(args, 0)
+
 	var err error
 	var stream *jsm.Stream
 
@@ -503,7 +568,10 @@ func (c *consumerCmd) findAction(_ *fisk.ParseContext) error {
 	return nil
 }
 
-func (c *consumerCmd) graphAction(_ *fisk.ParseContext) error {
+func (c *consumerCmd) graphAction(_ *cobra.Command, args []string) error {
+	c.stream = argValue(args, 0)
+	c.consumer = argValue(args, 1)
+
 	if !iu.IsTerminal() {
 		return fmt.Errorf("can only graph data on an interactive terminal")
 	}
@@ -647,7 +715,9 @@ func (c *consumerCmd) graphAction(_ *fisk.ParseContext) error {
 	}
 }
 
-func (c *consumerCmd) balanceAction(_ *fisk.ParseContext) error {
+func (c *consumerCmd) balanceAction(_ *cobra.Command, args []string) error {
+	c.stream = argValue(args, 0)
+
 	var err error
 	var stream *jsm.Stream
 
@@ -726,7 +796,10 @@ func (c *consumerCmd) balanceAction(_ *fisk.ParseContext) error {
 	return nil
 }
 
-func (c *consumerCmd) leaderStandDownAction(_ *fisk.ParseContext) error {
+func (c *consumerCmd) leaderStandDownAction(_ *cobra.Command, args []string) error {
+	c.stream = argValue(args, 0)
+	c.consumer = argValue(args, 1)
+
 	c.connectAndSetup(true, true)
 
 	consumer, err := c.mgr.LoadConsumer(c.stream, c.consumer)
@@ -926,13 +999,18 @@ func (c *consumerCmd) copyAndEditConsumer(cfg api.ConsumerConfig) (*api.Consumer
 
 	return &cfg, nil
 }
-func (c *consumerCmd) editAction(pc *fisk.ParseContext) error {
+func (c *consumerCmd) editAction(cmd *cobra.Command, args []string) error {
+	c.stream = argValue(args, 0)
+	c.consumer = argValue(args, 1)
+	c.hdrsOnlySet = cmd.Flags().Changed("headers-only")
+	c.metadataIsSet = cmd.Flags().Changed("metadata")
+
 	c.connectAndSetup(true, true)
 	var err error
 
 	if c.selectedConsumer == nil {
 		c.selectedConsumer, err = c.mgr.LoadConsumer(c.stream, c.consumer)
-		fisk.FatalIfError(err, "could not load Consumer")
+		fatalIfError(err, "could not load Consumer")
 	}
 
 	if !c.selectedConsumer.IsDurable() {
@@ -956,10 +1034,10 @@ func (c *consumerCmd) editAction(pc *fisk.ParseContext) error {
 
 	if c.interactive {
 		ncfg, err = c.interactiveEdit(t)
-		fisk.FatalIfError(err, "could not create new configuration for Consumer %s", c.selectedConsumer.Name())
+		fatalIfError(err, "could not create new configuration for Consumer %s", c.selectedConsumer.Name())
 	} else {
 		ncfg, err = c.copyAndEditConsumer(t)
-		fisk.FatalIfError(err, "could not create new configuration for Consumer %s", c.selectedConsumer.Name())
+		fatalIfError(err, "could not create new configuration for Consumer %s", c.selectedConsumer.Name())
 	}
 
 	if len(ncfg.BackOff) > 0 && ncfg.AckWait != t.AckWait {
@@ -992,7 +1070,7 @@ func (c *consumerCmd) editAction(pc *fisk.ParseContext) error {
 
 	if !c.force {
 		ok, err := askConfirmation(fmt.Sprintf("Really edit Consumer %s > %s", c.stream, c.consumer), false)
-		fisk.FatalIfError(err, "could not obtain confirmation")
+		fatalIfError(err, "could not obtain confirmation")
 
 		if !ok {
 			return nil
@@ -1031,7 +1109,10 @@ func (c *consumerCmd) backoffPolicy() ([]time.Duration, error) {
 	}
 }
 
-func (c *consumerCmd) rmAction(_ *fisk.ParseContext) error {
+func (c *consumerCmd) rmAction(_ *cobra.Command, args []string) error {
+	c.stream = argValue(args, 0)
+	c.consumer = argValue(args, 1)
+
 	var err error
 
 	if c.force {
@@ -1040,7 +1121,7 @@ func (c *consumerCmd) rmAction(_ *fisk.ParseContext) error {
 		}
 
 		c.nc, c.mgr, err = prepareHelper("", natsOpts()...)
-		fisk.FatalIfError(err, "setup failed")
+		fatalIfError(err, "setup failed")
 
 		err = c.mgr.DeleteConsumer(c.stream, c.consumer)
 		if err != nil {
@@ -1055,7 +1136,7 @@ func (c *consumerCmd) rmAction(_ *fisk.ParseContext) error {
 	c.connectAndSetup(true, true)
 
 	ok, err := askConfirmation(fmt.Sprintf("Really delete Consumer %s > %s", c.stream, c.consumer), false)
-	fisk.FatalIfError(err, "could not obtain confirmation")
+	fatalIfError(err, "could not obtain confirmation")
 
 	if !ok {
 		return nil
@@ -1063,24 +1144,26 @@ func (c *consumerCmd) rmAction(_ *fisk.ParseContext) error {
 
 	if c.selectedConsumer == nil {
 		c.selectedConsumer, err = c.mgr.LoadConsumer(c.stream, c.consumer)
-		fisk.FatalIfError(err, "could not load Consumer")
+		fatalIfError(err, "could not load Consumer")
 	}
 
 	return c.selectedConsumer.Delete()
 }
 
-func (c *consumerCmd) lsAction(pc *fisk.ParseContext) error {
+func (c *consumerCmd) lsAction(_ *cobra.Command, args []string) error {
+	c.stream = argValue(args, 0)
+
 	c.connectAndSetup(true, false)
 
 	stream, err := c.mgr.LoadStream(c.stream)
-	fisk.FatalIfError(err, "could not load Consumers")
+	fatalIfError(err, "could not load Consumers")
 
 	consumerNames, err := stream.ConsumerNames()
-	fisk.FatalIfError(err, "could not load Consumers")
+	fatalIfError(err, "could not load Consumers")
 
 	if c.json {
 		err = iu.PrintJSON(consumerNames)
-		fisk.FatalIfError(err, "could not display Consumers")
+		fatalIfError(err, "could not display Consumers")
 		return nil
 	}
 
@@ -1143,7 +1226,7 @@ func (c *consumerCmd) renderConsumerAsTable(stream *jsm.Stream) (string, error) 
 func (c *consumerCmd) showConsumer(consumer *jsm.Consumer) {
 	config := consumer.Configuration()
 	state, err := consumer.LatestState()
-	fisk.FatalIfError(err, "could not load Consumer %s > %s", c.stream, c.consumer)
+	fatalIfError(err, "could not load Consumer %s > %s", c.stream, c.consumer)
 
 	c.showInfo(config, state)
 }
@@ -1356,12 +1439,15 @@ func (c *consumerCmd) showInfo(config api.ConsumerConfig, state api.ConsumerInfo
 	cols.Frender(os.Stdout)
 }
 
-func (c *consumerCmd) stateAction(pc *fisk.ParseContext) error {
+func (c *consumerCmd) stateAction(cmd *cobra.Command, args []string) error {
 	c.showStateOnly = true
-	return c.infoAction(pc)
+	return c.infoAction(cmd, args)
 }
 
-func (c *consumerCmd) infoAction(_ *fisk.ParseContext) error {
+func (c *consumerCmd) infoAction(_ *cobra.Command, args []string) error {
+	c.stream = argValue(args, 0)
+	c.consumer = argValue(args, 1)
+
 	c.connectAndSetup(true, true)
 
 	var err error
@@ -1369,7 +1455,7 @@ func (c *consumerCmd) infoAction(_ *fisk.ParseContext) error {
 
 	if consumer == nil {
 		consumer, err = c.mgr.LoadConsumer(c.stream, c.consumer)
-		fisk.FatalIfError(err, "could not load Consumer %s > %s", c.stream, c.consumer)
+		fatalIfError(err, "could not load Consumer %s > %s", c.stream, c.consumer)
 	}
 
 	c.showConsumer(consumer)
@@ -1384,7 +1470,7 @@ func (c *consumerCmd) replayPolicyFromString(p string) api.ReplayPolicy {
 	case "original":
 		return api.ReplayOriginal
 	default:
-		fisk.Fatalf("invalid replay policy '%s'", p)
+		fatalf("invalid replay policy '%s'", p)
 		return api.ReplayInstant
 	}
 }
@@ -1400,7 +1486,7 @@ func (c *consumerCmd) ackPolicyFromString(p string) api.AckPolicy {
 	case "flowcontrol", "flow_control", "fc":
 		return api.AckFlowControl
 	default:
-		fisk.Fatalf("invalid ack policy '%s'", p)
+		fatalf("invalid ack policy '%s'", p)
 		// unreachable
 		return api.AckExplicit
 	}
@@ -1408,7 +1494,7 @@ func (c *consumerCmd) ackPolicyFromString(p string) api.AckPolicy {
 
 func (c *consumerCmd) sampleFreqFromInt(s int) string {
 	if s > 100 || s < 0 {
-		fisk.Fatalf("sample percent is not between 0 and 100")
+		fatalf("sample percent is not between 0 and 100")
 	}
 
 	if s > 0 {
@@ -1443,19 +1529,26 @@ func (c *consumerCmd) setStartPolicy(cfg *api.ConsumerConfig, policy string) {
 		cfg.DeliverPolicy = api.DeliverByStartSequence
 		cfg.OptStartSeq = uint64(seq)
 	} else {
-		d, err := fisk.ParseDuration(policy)
-		fisk.FatalIfError(err, "could not parse starting delta")
+		d, err := parseDuration(policy)
+		fatalIfError(err, "could not parse starting delta")
 		t := time.Now().UTC().Add(-d)
 		cfg.DeliverPolicy = api.DeliverByStartTime
 		cfg.OptStartTime = &t
 	}
 }
 
-func (c *consumerCmd) cpAction(pc *fisk.ParseContext) (err error) {
+func (c *consumerCmd) cpAction(cmd *cobra.Command, args []string) (err error) {
+	c.stream = args[0]
+	c.consumer = args[1]
+	c.destination = args[2]
+	c.fcSet = cmd.Flags().Changed("flow-control")
+	c.hdrsOnlySet = cmd.Flags().Changed("headers-only")
+	c.metadataIsSet = cmd.Flags().Changed("metadata")
+
 	c.connectAndSetup(true, false)
 
 	source, err := c.mgr.LoadConsumer(c.stream, c.consumer)
-	fisk.FatalIfError(err, "could not load source Consumer")
+	fatalIfError(err, "could not load source Consumer")
 
 	cfg := source.Configuration()
 
@@ -1513,8 +1606,8 @@ func (c *consumerCmd) cpAction(pc *fisk.ParseContext) (err error) {
 	}
 
 	if c.idleHeartbeat != "" && c.idleHeartbeat != "-1" {
-		hb, err := fisk.ParseDuration(c.idleHeartbeat)
-		fisk.FatalIfError(err, "Invalid heartbeat duration")
+		hb, err := parseDuration(c.idleHeartbeat)
+		fatalIfError(err, "Invalid heartbeat duration")
 		cfg.Heartbeat = hb
 	}
 
@@ -1571,7 +1664,7 @@ func (c *consumerCmd) cpAction(pc *fisk.ParseContext) (err error) {
 	}
 
 	consumer, err := c.mgr.NewConsumerFromDefault(c.stream, cfg)
-	fisk.FatalIfError(err, "Consumer creation failed")
+	fatalIfError(err, "Consumer creation failed")
 
 	if cfg.Durable == "" {
 		return nil
@@ -1649,7 +1742,7 @@ func (c *consumerCmd) prepareConfig() (cfg *api.ConsumerConfig, err error) {
 			Message: "Consumer name",
 			Help:    "This will be used for the name to be used when referencing this Consumer later. Settable using 'name' CLI argument",
 		}, &c.consumer, survey.WithValidator(survey.Required))
-		fisk.FatalIfError(err, "could not request durable name")
+		fatalIfError(err, "could not request durable name")
 	}
 
 	if c.ephemeral {
@@ -1659,7 +1752,7 @@ func (c *consumerCmd) prepareConfig() (cfg *api.ConsumerConfig, err error) {
 	}
 
 	if ok, _ := regexp.MatchString(`\.|\*|>`, cfg.Durable); ok {
-		fisk.Fatalf("durable name can not contain '.', '*', '>'")
+		fatalf("durable name can not contain '.', '*', '>'")
 	}
 
 	if !c.pull && c.delivery == "" {
@@ -1667,7 +1760,7 @@ func (c *consumerCmd) prepareConfig() (cfg *api.ConsumerConfig, err error) {
 			Message: "Delivery target (empty for Pull Consumers)",
 			Help:    "Consumers can be in 'push' or 'pull' mode, in 'push' mode messages are dispatched in real time to a target NATS subject, this is that subject. Leaving this blank creates a 'pull' mode Consumer. Settable using --target and --pull",
 		}, &c.delivery)
-		fisk.FatalIfError(err, "could not request delivery target")
+		fatalIfError(err, "could not request delivery target")
 	}
 
 	cfg.DeliverSubject = c.delivery
@@ -1711,7 +1804,7 @@ func (c *consumerCmd) prepareConfig() (cfg *api.ConsumerConfig, err error) {
 			Message: "Delivery Queue Group",
 			Help:    "When set push consumers will only deliver messages to subscriptions matching this queue group",
 		}, &c.deliveryGroup)
-		fisk.FatalIfError(err, "could not request delivery group")
+		fatalIfError(err, "could not request delivery group")
 	}
 	cfg.DeliverGroup = c.deliveryGroup
 	if cfg.DeliverGroup == "_unset_" {
@@ -1724,7 +1817,7 @@ func (c *consumerCmd) prepareConfig() (cfg *api.ConsumerConfig, err error) {
 			Help:    "This controls how the Consumer starts out, does it make all messages available, only the latest, latest per subject, ones after a certain time or time sequence. Settable using --deliver",
 			Default: "all",
 		}, &c.startPolicy, survey.WithValidator(survey.Required))
-		fisk.FatalIfError(err, "could not request start policy")
+		fatalIfError(err, "could not request start policy")
 	}
 
 	c.setStartPolicy(cfg, c.startPolicy)
@@ -1742,7 +1835,7 @@ func (c *consumerCmd) prepareConfig() (cfg *api.ConsumerConfig, err error) {
 			Default: dflt,
 			Help:    "Messages that are not acknowledged will be redelivered at a later time. 'none' means no acknowledgement is needed only 1 delivery ever, 'all' means acknowledging message 10 will also acknowledge 0-9 and 'explicit' means each has to be acknowledged specifically. Settable using --ack",
 		}, &c.ackPolicy)
-		fisk.FatalIfError(err, "could not ask acknowledgement policy")
+		fatalIfError(err, "could not ask acknowledgement policy")
 	}
 
 	if c.replayPolicy == "" {
@@ -1752,7 +1845,7 @@ func (c *consumerCmd) prepareConfig() (cfg *api.ConsumerConfig, err error) {
 			Default: "instant",
 			Help:    "Messages can be replayed at the rate they arrived in or as fast as possible. Settable using --replay",
 		}, &c.replayPolicy)
-		fisk.FatalIfError(err, "could not ask replay policy")
+		fatalIfError(err, "could not ask replay policy")
 	}
 
 	cfg.AckPolicy = c.ackPolicyFromString(c.ackPolicy)
@@ -1766,7 +1859,7 @@ func (c *consumerCmd) prepareConfig() (cfg *api.ConsumerConfig, err error) {
 
 	if c.samplePct > 0 {
 		if c.samplePct > 100 {
-			fisk.Fatalf("sample percent is not between 0 and 100")
+			fatalf("sample percent is not between 0 and 100")
 		}
 
 		cfg.SampleFrequency = strconv.Itoa(c.samplePct)
@@ -1781,7 +1874,7 @@ func (c *consumerCmd) prepareConfig() (cfg *api.ConsumerConfig, err error) {
 				Default: "instant",
 				Help:    "Replay policy is the time interval at which messages are delivered to interested parties. 'instant' means deliver all as soon as possible while 'original' will match the time intervals in which messages were received, useful for replaying production traffic in development. Settable using --replay",
 			}, &mode)
-			fisk.FatalIfError(err, "could not ask replay policy")
+			fatalIfError(err, "could not ask replay policy")
 			c.replayPolicy = mode
 		}
 	}
@@ -1798,7 +1891,7 @@ func (c *consumerCmd) prepareConfig() (cfg *api.ConsumerConfig, err error) {
 			Default: "",
 			Help:    "Consumers can filter messages from the stream, this is a space or comma separated list that can include wildcards. Settable using --filter",
 		}, &sub)
-		fisk.FatalIfError(err, "could not ask for filtering subject")
+		fatalIfError(err, "could not ask for filtering subject")
 		c.filterSubjects = iu.SplitString(sub)
 	}
 
@@ -1819,7 +1912,7 @@ func (c *consumerCmd) prepareConfig() (cfg *api.ConsumerConfig, err error) {
 			Default: "-1",
 			Help:    "When this is -1 unlimited attempts to deliver an un acknowledged message is made, when this is >0 it will be maximum amount of times a message is delivered after which it is ignored. Settable using --max-deliver.",
 		}, &c.maxDeliver)
-		fisk.FatalIfError(err, "could not ask for maximum allowed deliveries")
+		fatalIfError(err, "could not ask for maximum allowed deliveries")
 	}
 
 	if c.maxAckPending == -1 && cfg.AckPolicy != api.AckNone {
@@ -1828,15 +1921,15 @@ func (c *consumerCmd) prepareConfig() (cfg *api.ConsumerConfig, err error) {
 			Default: "0",
 			Help:    "The maximum number of messages without acknowledgement that can be outstanding, once this limit is reached message delivery will be suspended. Settable using --max-pending.",
 		}, &c.maxAckPending)
-		fisk.FatalIfError(err, "could not ask for maximum outstanding acknowledgements")
+		fatalIfError(err, "could not ask for maximum outstanding acknowledgements")
 	}
 
 	if cfg.DeliverSubject != "" {
 		if c.idleHeartbeat == "-1" {
 			cfg.Heartbeat = 0
 		} else if c.idleHeartbeat != "" {
-			cfg.Heartbeat, err = fisk.ParseDuration(c.idleHeartbeat)
-			fisk.FatalIfError(err, "invalid heartbeat duration")
+			cfg.Heartbeat, err = parseDuration(c.idleHeartbeat)
+			fatalIfError(err, "invalid heartbeat duration")
 		} else {
 			idle := "0s"
 			err = iu.AskOne(&survey.Input{
@@ -1844,16 +1937,16 @@ func (c *consumerCmd) prepareConfig() (cfg *api.ConsumerConfig, err error) {
 				Help:    "When a Push consumer is idle for the given period an empty message with a Status header of 100 will be sent to the delivery subject, settable using --heartbeat",
 				Default: "0s",
 			}, &idle)
-			fisk.FatalIfError(err, "could not ask for idle heartbeat")
-			cfg.Heartbeat, err = fisk.ParseDuration(idle)
-			fisk.FatalIfError(err, "invalid heartbeat duration")
+			fatalIfError(err, "could not ask for idle heartbeat")
+			cfg.Heartbeat, err = parseDuration(idle)
+			fatalIfError(err, "invalid heartbeat duration")
 		}
 	}
 
 	if cfg.DeliverSubject != "" {
 		if !c.fcSet {
 			c.fc, err = askConfirmation("Enable Flow Control, ie --flow-control", false)
-			fisk.FatalIfError(err, "could not ask flow control")
+			fatalIfError(err, "could not ask flow control")
 		}
 
 		cfg.FlowControl = c.fc
@@ -1861,7 +1954,7 @@ func (c *consumerCmd) prepareConfig() (cfg *api.ConsumerConfig, err error) {
 
 	if !c.hdrsOnlySet {
 		c.hdrsOnly, err = askConfirmation("Deliver headers only without bodies", false)
-		fisk.FatalIfError(err, "could not ask headers only")
+		fatalIfError(err, "could not ask headers only")
 	}
 	cfg.HeadersOnly = c.hdrsOnly
 
@@ -1964,7 +2057,7 @@ func (c *consumerCmd) parsePauseUntil(until string) (time.Time, error) {
 
 	ts, err = time.Parse(time.DateTime, until)
 	if err != nil {
-		dur, err := fisk.ParseDuration(until)
+		dur, err := parseDuration(until)
 		if err != nil {
 			return ts, fmt.Errorf("could not parse the pause time as either timestamp or duration")
 		}
@@ -1974,7 +2067,10 @@ func (c *consumerCmd) parsePauseUntil(until string) (time.Time, error) {
 	return ts, nil
 }
 
-func (c *consumerCmd) resumeAction(_ *fisk.ParseContext) error {
+func (c *consumerCmd) resumeAction(_ *cobra.Command, args []string) error {
+	c.stream = argValue(args, 0)
+	c.consumer = argValue(args, 1)
+
 	c.connectAndSetup(true, true)
 
 	err := iu.RequireAPILevel(c.mgr, 1, "resuming Consumers requires NATS Server 2.11")
@@ -1992,7 +2088,7 @@ func (c *consumerCmd) resumeAction(_ *fisk.ParseContext) error {
 
 	if !c.force {
 		ok, err := askConfirmation(fmt.Sprintf("Really resume Consumer %s > %s", c.stream, c.consumer), false)
-		fisk.FatalIfError(err, "could not obtain confirmation")
+		fatalIfError(err, "could not obtain confirmation")
 
 		if !ok {
 			return nil
@@ -2008,7 +2104,11 @@ func (c *consumerCmd) resumeAction(_ *fisk.ParseContext) error {
 	return nil
 }
 
-func (c *consumerCmd) pauseAction(_ *fisk.ParseContext) error {
+func (c *consumerCmd) pauseAction(_ *cobra.Command, args []string) error {
+	c.stream = argValue(args, 0)
+	c.consumer = argValue(args, 1)
+	c.pauseUntil = argValue(args, 2)
+
 	c.connectAndSetup(true, true)
 
 	err := iu.RequireAPILevel(c.mgr, 1, "pausing Consumers requires NATS Server 2.11")
@@ -2035,7 +2135,7 @@ func (c *consumerCmd) pauseAction(_ *fisk.ParseContext) error {
 
 	if !c.force {
 		ok, err := askConfirmation(fmt.Sprintf("Really pause Consumer %s > %s until %s", c.stream, c.consumer, f(ts)), false)
-		fisk.FatalIfError(err, "could not obtain confirmation")
+		fatalIfError(err, "could not obtain confirmation")
 
 		if !ok {
 			return nil
@@ -2085,7 +2185,7 @@ func (c *consumerCmd) askBackoffPolicy() error {
 		if err != nil {
 			return err
 		}
-		c.backoffMin, err = fisk.ParseDuration(d)
+		c.backoffMin, err = parseDuration(d)
 		if err != nil {
 			return err
 		}
@@ -2098,7 +2198,7 @@ func (c *consumerCmd) askBackoffPolicy() error {
 		if err != nil {
 			return err
 		}
-		c.backoffMax, err = fisk.ParseDuration(d)
+		c.backoffMax, err = parseDuration(d)
 		if err != nil {
 			return err
 		}
@@ -2131,7 +2231,13 @@ func (c *consumerCmd) validateCfg(cfg *api.ConsumerConfig) (bool, []byte, []stri
 	return valid, j, errs, nil
 }
 
-func (c *consumerCmd) createAction(pc *fisk.ParseContext) (err error) {
+func (c *consumerCmd) createAction(cmd *cobra.Command, args []string) (err error) {
+	c.stream = argValue(args, 0)
+	c.consumer = argValue(args, 1)
+	c.fcSet = cmd.Flags().Changed("flow-control")
+	c.hdrsOnlySet = cmd.Flags().Changed("headers-only")
+	c.metadataIsSet = cmd.Flags().Changed("metadata")
+
 	c.connectAndSetup(true, false)
 	cfg, err := c.prepareConfig()
 	if err != nil {
@@ -2141,12 +2247,12 @@ func (c *consumerCmd) createAction(pc *fisk.ParseContext) (err error) {
 	switch {
 	case c.validateOnly:
 		valid, j, errs, err := c.validateCfg(cfg)
-		fisk.FatalIfError(err, "Could not validate configuration")
+		fatalIfError(err, "Could not validate configuration")
 
 		fmt.Println(string(j))
 		fmt.Println()
 		if !valid {
-			fisk.Fatalf("Validation Failed: %s", strings.Join(errs, "\n\t"))
+			fatalf("Validation Failed: %s", strings.Join(errs, "\n\t"))
 		}
 
 		fmt.Println("Configuration is a valid Consumer")
@@ -2154,10 +2260,10 @@ func (c *consumerCmd) createAction(pc *fisk.ParseContext) (err error) {
 
 	case c.outFile != "":
 		valid, j, errs, err := c.validateCfg(cfg)
-		fisk.FatalIfError(err, "Could not validate configuration")
+		fatalIfError(err, "Could not validate configuration")
 
 		if !valid {
-			fisk.Fatalf("Validation Failed: %s", strings.Join(errs, "\n\t"))
+			fatalf("Validation Failed: %s", strings.Join(errs, "\n\t"))
 		}
 
 		return os.WriteFile(c.outFile, j, 0600)
@@ -2169,7 +2275,7 @@ func (c *consumerCmd) createAction(pc *fisk.ParseContext) (err error) {
 	}
 
 	created, err := c.mgr.NewConsumerFromDefault(c.stream, *cfg)
-	fisk.FatalIfError(err, "Consumer creation failed")
+	fatalIfError(err, "Consumer creation failed")
 
 	c.consumer = created.Name()
 
@@ -2207,21 +2313,21 @@ func (c *consumerCmd) getNextMsgDirect(stream string, consumer string) error {
 	req := &api.JSApiConsumerGetNextRequest{Batch: 1, Expires: opts().Timeout}
 
 	sub, err := c.nc.SubscribeSync(c.nc.NewRespInbox())
-	fisk.FatalIfError(err, "subscribe failed")
+	fatalIfError(err, "subscribe failed")
 	sub.AutoUnsubscribe(1)
 
 	err = c.mgr.NextMsgRequest(stream, consumer, sub.Subject, req)
-	fisk.FatalIfError(err, "could not request next message")
+	fatalIfError(err, "could not request next message")
 
 	fatalIfNotPull := func() {
 		cons := c.selectedConsumer
 		if cons == nil {
 			cons, err = c.mgr.LoadConsumer(stream, consumer)
-			fisk.FatalIfError(err, "could not load consumer %q", consumer)
+			fatalIfError(err, "could not load consumer %q", consumer)
 		}
 
 		if !cons.IsPullMode() {
-			fisk.Fatalf("consumer %q is not a Pull consumer", consumer)
+			fatalf("consumer %q is not a Pull consumer", consumer)
 		}
 	}
 
@@ -2231,11 +2337,11 @@ func (c *consumerCmd) getNextMsgDirect(stream string, consumer string) error {
 		}
 
 		if c.ack || c.nak {
-			fisk.Fatalf("can not both Acknowledge and Terminate message")
+			fatalf("can not both Acknowledge and Terminate message")
 		}
 
 		if c.ack && c.nak {
-			fisk.Fatalf("can not both Acknowledge and NaK message")
+			fatalf("can not both Acknowledge and NaK message")
 		}
 	}
 
@@ -2243,7 +2349,7 @@ func (c *consumerCmd) getNextMsgDirect(stream string, consumer string) error {
 	if err != nil {
 		fatalIfNotPull()
 	}
-	fisk.FatalIfError(err, "no message received")
+	fatalIfError(err, "no message received")
 
 	if msg.Header != nil && msg.Header.Get("Status") == "503" {
 		fatalIfNotPull()
@@ -2285,7 +2391,7 @@ func (c *consumerCmd) getNextMsgDirect(stream string, consumer string) error {
 
 	if c.term {
 		err = msg.Term()
-		fisk.FatalIfError(err, "could not Terminate message")
+		fatalIfError(err, "could not Terminate message")
 		c.nc.Flush()
 		fmt.Println("\nTerminated message")
 	}
@@ -2311,7 +2417,7 @@ func (c *consumerCmd) getNextMsgDirect(stream string, consumer string) error {
 
 		err = msg.Respond(ack)
 
-		fisk.FatalIfError(err, "could not Acknowledge message")
+		fatalIfError(err, "could not Acknowledge message")
 		c.nc.Flush()
 
 		if !c.raw {
@@ -2361,7 +2467,7 @@ func (c *consumerCmd) subscribeConsumer(consumer *jsm.Consumer) (err error) {
 			msginfo, err = jsm.ParseJSMsgMetadata(m)
 		}
 
-		fisk.FatalIfError(err, "could not parse JetStream metadata: '%s'", m.Reply)
+		fatalIfError(err, "could not parse JetStream metadata: '%s'", m.Reply)
 
 		if !c.raw {
 			now := time.Now().Format("15:04:05")
@@ -2414,18 +2520,21 @@ func (c *consumerCmd) subscribeConsumer(consumer *jsm.Consumer) (err error) {
 		_, err = c.nc.QueueSubscribe(consumer.DeliverySubject(), consumer.DeliverGroup(), handler)
 	}
 
-	fisk.FatalIfError(err, "could not subscribe")
+	fatalIfError(err, "could not subscribe")
 
 	<-ctx.Done()
 
 	return nil
 }
 
-func (c *consumerCmd) subAction(_ *fisk.ParseContext) error {
+func (c *consumerCmd) subAction(_ *cobra.Command, args []string) error {
+	c.stream = argValue(args, 0)
+	c.consumer = argValue(args, 1)
+
 	c.connectAndSetup(true, true, nats.UseOldRequestStyle())
 
 	consumer, err := c.mgr.LoadConsumer(c.stream, c.consumer)
-	fisk.FatalIfError(err, "could not load Consumer")
+	fatalIfError(err, "could not load Consumer")
 
 	if consumer.AckPolicy() == api.AckNone {
 		c.ack = false
@@ -2441,7 +2550,11 @@ func (c *consumerCmd) subAction(_ *fisk.ParseContext) error {
 	}
 }
 
-func (c *consumerCmd) nextAction(_ *fisk.ParseContext) error {
+func (c *consumerCmd) nextAction(cmd *cobra.Command, args []string) error {
+	c.stream = args[0]
+	c.consumer = args[1]
+	c.ackSetByUser = cmd.Flags().Changed("ack")
+
 	c.connectAndSetup(false, false, nats.UseOldRequestStyle())
 
 	var err error
@@ -2460,7 +2573,7 @@ func (c *consumerCmd) connectAndSetup(askStream bool, askConsumer bool, opts ...
 
 	if c.nc == nil || c.mgr == nil {
 		c.nc, c.mgr, err = prepareHelper("", append(natsOpts(), opts...)...)
-		fisk.FatalIfError(err, "setup failed")
+		fatalIfError(err, "setup failed")
 	}
 
 	if c.stream != "" && c.consumer != "" {
@@ -2472,16 +2585,18 @@ func (c *consumerCmd) connectAndSetup(askStream bool, askConsumer bool, opts ...
 
 	if askStream {
 		c.stream, _, err = selectStream(c.mgr, c.stream, c.force, c.showAll)
-		fisk.FatalIfError(err, "could not select Stream")
+		fatalIfError(err, "could not select Stream")
 
 		if askConsumer {
 			c.consumer, c.selectedConsumer, err = selectConsumer(c.mgr, c.stream, c.consumer, c.force)
-			fisk.FatalIfError(err, "could not select Consumer")
+			fatalIfError(err, "could not select Consumer")
 		}
 	}
 }
 
-func (c *consumerCmd) reportAction(_ *fisk.ParseContext) error {
+func (c *consumerCmd) reportAction(_ *cobra.Command, args []string) error {
+	c.stream = argValue(args, 0)
+
 	c.connectAndSetup(true, false)
 
 	s, err := c.mgr.LoadStream(c.stream)

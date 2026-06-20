@@ -24,7 +24,7 @@ import (
 	"github.com/nats-io/jsm.go/audit/archive"
 	iu "github.com/nats-io/natscli/internal/util"
 
-	"github.com/choria-io/fisk"
+	"github.com/spf13/cobra"
 )
 
 type auditAnalyzeCmd struct {
@@ -41,25 +41,31 @@ type auditAnalyzeCmd struct {
 	isTerminal    bool
 }
 
-func configureAuditAnalyzeCommand(app *fisk.CmdClause) {
+func configureAuditAnalyzeCommand(app *cobra.Command) {
 	c := &auditAnalyzeCmd{
 		isTerminal: iu.IsTerminal(),
 	}
 
-	analyze := app.Command("analyze", "perform checks against an archive created by the 'gather' subcommand").Action(c.analyze)
-	analyze.Tag("scope:system", "impact:ro")
-	analyze.Arg("archive", "path to input archive to analyze").ExistingFileVar(&c.archivePath)
-	analyze.Flag("max-examples", "How many example issues to display for each failed check (0 for unlimited)").Default("5").UintVar(&c.examplesLimit)
-	analyze.Flag("skip", "Prevents checks from running by check code").PlaceHolder("CODE").StringsVar(&c.block)
-	analyze.Flag("load", "Loads a saved report").PlaceHolder("FILE").StringVar(&c.loadPath)
-	analyze.Flag("save", "Stores the analyze result to a file").PlaceHolder("FILE").StringVar(&c.writePath)
-	analyze.Flag("force", "Force overwriting existing report files").Short('f').UnNegatableBoolVar(&c.force)
-	analyze.Flag("json", "Output JSON format").Short('j').UnNegatableBoolVar(&c.json)
-	analyze.Flag("markdown", "Output Markdown format").UnNegatableBoolVar(&c.md)
-	analyze.Flag("verbose", "Log verbosely").UnNegatableBoolVar(&c.verbose)
+	analyze := addCommand(app, "analyze", "perform checks against an archive created by the 'gather' subcommand")
+	analyze.RunE = c.analyze
+	cmdAddTags(analyze, "scope:system", "impact:ro")
+	addArg(analyze, "archive", "path to input archive to analyze", false, "path")
+	analyze.Flags().UintVar(&c.examplesLimit, "max-examples", 5, "How many example issues to display for each failed check (0 for unlimited)")
+	analyze.Flags().StringArrayVar(&c.block, "skip", nil, "Prevents checks from running by check code")
+	flagPlaceholder(analyze, "skip", "CODE")
+	analyze.Flags().StringVar(&c.loadPath, "load", "", "Loads a saved report")
+	flagPlaceholder(analyze, "load", "FILE")
+	analyze.Flags().StringVar(&c.writePath, "save", "", "Stores the analyze result to a file")
+	flagPlaceholder(analyze, "save", "FILE")
+	analyze.Flags().BoolVarP(&c.force, "force", "f", false, "Force overwriting existing report files")
+	analyze.Flags().BoolVarP(&c.json, "json", "j", false, "Output JSON format")
+	analyze.Flags().BoolVar(&c.md, "markdown", false, "Output Markdown format")
+	analyze.Flags().BoolVar(&c.verbose, "verbose", false, "Log verbosely")
 }
 
-func (c *auditAnalyzeCmd) analyze(_ *fisk.ParseContext) error {
+func (c *auditAnalyzeCmd) analyze(_ *cobra.Command, args []string) error {
+	c.archivePath = argValue(args, 0)
+
 	var log api.Logger
 	var err error
 

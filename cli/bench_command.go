@@ -35,7 +35,6 @@ import (
 	iu "github.com/nats-io/natscli/internal/util"
 	"github.com/synadia-io/orbit.go/jetstreamext"
 
-	"github.com/choria-io/fisk"
 	"github.com/dustin/go-humanize"
 	"github.com/gosuri/uiprogress"
 	"github.com/nats-io/nats.go"
@@ -43,6 +42,8 @@ import (
 	services "github.com/nats-io/nats.go/micro"
 
 	"github.com/nats-io/natscli/internal/bench"
+
+	"github.com/spf13/cobra"
 )
 
 type benchCmd struct {
@@ -128,178 +129,205 @@ func (c *benchCmd) perClientThroughput() float64 {
 func configureBenchCommand(app commandHost) {
 	c := &benchCmd{}
 
-	addCommonFlags := func(f *fisk.CmdClause) {
-		f.Tag("scope:user", "impact:rw")
-		f.Flag("clients", "Number of concurrent clients").Default("1").IntVar(&c.numClients)
-		f.Flag("msgs", "Number of messages to publish or subscribe to").Default("100000").IntVar(&c.numMsg)
-		f.Flag("progress", "Enable or disable the progress bar").Default("true").BoolVar(&c.progressBar)
-		f.Flag("csv", "Save benchmark data to CSV file").StringVar(&c.csvFile)
-		f.Flag("size", "Size of the test messages").Default("128B").StringVar(&c.msgSizeString)
+	addCommonFlags := func(f *cobra.Command) {
+		cmdAddTags(f, "scope:user", "impact:rw")
+		f.Flags().IntVar(&c.numClients, "clients", 1, "Number of concurrent clients")
+		f.Flags().IntVar(&c.numMsg, "msgs", 100000, "Number of messages to publish or subscribe to")
+		negatableBoolVar(f, &c.progressBar, "progress", true, "Enable or disable the progress bar")
+		f.Flags().StringVar(&c.csvFile, "csv", "", "Save benchmark data to CSV file")
+		f.Flags().StringVar(&c.msgSizeString, "size", "128B", "Size of the test messages")
 		// TODO: support randomized payload data
 	}
 
-	addPubFlags := func(f *fisk.CmdClause) {
-		f.Flag("multisubject", "Multi-subject mode, each message is published on a subject that includes the publisher's message sequence number as a token").UnNegatableBoolVar(&c.multiSubject)
-		f.Flag("multisubjectmax", "The maximum number of subjects to use in multi-subject mode (0 means no max)").Default("100000").IntVar(&c.multiSubjectMax)
-		f.Flag("multisubjectrandomize", "Randomize which subjects are being used when in multisubject mode").UnNegatableBoolVar(&c.multiSubjectRandom)
-		f.Flag("payload", "File containing a message payload to send").ExistingFileVar(&c.payloadFilename)
-		f.Flag("header", "Adds headers to the message using K:V format").Short('H').StringsVar(&c.hdrs)
+	addPubFlags := func(f *cobra.Command) {
+		f.Flags().BoolVar(&c.multiSubject, "multisubject", false, "Multi-subject mode, each message is published on a subject that includes the publisher's message sequence number as a token")
+		f.Flags().IntVar(&c.multiSubjectMax, "multisubjectmax", 100000, "The maximum number of subjects to use in multi-subject mode (0 means no max)")
+		f.Flags().BoolVar(&c.multiSubjectRandom, "multisubjectrandomize", false, "Randomize which subjects are being used when in multisubject mode")
+		f.Flags().Var(newExistingFileValue(&c.payloadFilename), "payload", "File containing a message payload to send")
+		f.Flags().StringArrayVarP(&c.hdrs, "header", "H", nil, "Adds headers to the message using K:V format")
 	}
 
-	addThroughputFlag := func(f *fisk.CmdClause) {
-		f.Flag("throughput", "If set > 0, throttle aggregate message send throughput to approximately THROUGHPUT messages/second across all clients (0 disables). If --sleep is set, the achieved rate may be lower").Default("0").PlaceHolder("THROUGHPUT").IntVar(&c.throughput)
+	addThroughputFlag := func(f *cobra.Command) {
+		f.Flags().IntVar(&c.throughput, "throughput", 0, "If set > 0, throttle aggregate message send throughput to approximately THROUGHPUT messages/second across all clients (0 disables). If --sleep is set, the achieved rate may be lower")
+		flagPlaceholder(f, "throughput", "THROUGHPUT")
 	}
 
-	addJSCommonFlags := func(f *fisk.CmdClause) {
-		f.Flag("stream", "The name of the stream to create or use").Default(bench.DefaultStreamName).StringVar(&c.streamOrBucketName)
-		f.Flag("sleep", "Sleep for the specified interval between publications").Default("0s").PlaceHolder("DURATION").DurationVar(&c.sleep)
+	addJSCommonFlags := func(f *cobra.Command) {
+		f.Flags().StringVar(&c.streamOrBucketName, "stream", bench.DefaultStreamName, "The name of the stream to create or use")
+		f.Flags().DurationVar(&c.sleep, "sleep", 0*time.Second, "Sleep for the specified interval between publications")
+		flagPlaceholder(f, "sleep", "DURATION")
 	}
 
-	addJSConsumerFlags := func(f *fisk.CmdClause) {
-		f.Flag("consumer", "Specify the durable consumer name to use").Default(bench.DefaultDurableConsumerName).StringVar(&c.consumerName)
-		f.Flag("batch", "Sets the max number of messages that can be buffered in the client").Default("500").IntVar(&c.batchSize)
-		f.Flag("acks", "Acknowledgement mode for the consumer").Default(bench.AckModeExplicit).EnumVar(&c.ackMode, bench.AckModeExplicit, bench.AckModeNone, bench.AckModeAll)
-		f.Flag("doubleack", "Synchronously acknowledge messages, waiting for a reply from the server").Default("false").BoolVar(&c.doubleAck)
-		f.Flag("filter", "Filter Stream by subjects").PlaceHolder("SUBJECTS").StringsVar(&c.filterSubjects)
-		f.Flag("purge", "Purge the stream before running").UnNegatableBoolVar(&c.purge)
+	addJSConsumerFlags := func(f *cobra.Command) {
+		f.Flags().StringVar(&c.consumerName, "consumer", bench.DefaultDurableConsumerName, "Specify the durable consumer name to use")
+		f.Flags().IntVar(&c.batchSize, "batch", 500, "Sets the max number of messages that can be buffered in the client")
+		f.Flags().Var(newEnumValue(&c.ackMode, bench.AckModeExplicit, bench.AckModeExplicit, bench.AckModeNone, bench.AckModeAll), "acks", "Acknowledgement mode for the consumer")
+		negatableBoolVar(f, &c.doubleAck, "doubleack", false, "Synchronously acknowledge messages, waiting for a reply from the server")
+		f.Flags().StringArrayVar(&c.filterSubjects, "filter", nil, "Filter Stream by subjects")
+		flagPlaceholder(f, "filter", "SUBJECTS")
+		f.Flags().BoolVar(&c.purge, "purge", false, "Purge the stream before running")
 	}
 
-	addJSPubFlags := func(f *fisk.CmdClause) {
-		f.Flag("create", "Create or update the stream first").UnNegatableBoolVar(&c.createStream)
-		f.Flag("storage", "JetStream storage (memory/file) for the \"benchstream\" stream").Default("file").EnumVar(&c.storage, "memory", "file")
-		f.Flag("replicas", "Number of replicas for the \"benchstream\" stream").Default("1").IntVar(&c.replicas)
-		f.Flag("maxbytes", "The maximum size of the stream or KV bucket in bytes").Default("1GB").StringVar(&c.streamMaxBytesString)
-		f.Flag("dedup", "Sets a message id in the header to use JS Publish de-duplication").Default("false").UnNegatableBoolVar(&c.deDuplication)
-		f.Flag("dedupwindow", "Sets the duration of the stream's deduplication functionality").Default("2m").DurationVar(&c.deDuplicationWindow)
-		f.Flag("purge", "Purge the stream before running").UnNegatableBoolVar(&c.purge)
-		f.Flag("persistasync", "Set the persistence mode for the steam to asynchronous (only for R1 streams)").UnNegatableBoolVar(&c.persistModeAsync)
+	addJSPubFlags := func(f *cobra.Command) {
+		f.Flags().BoolVar(&c.createStream, "create", false, "Create or update the stream first")
+		f.Flags().Var(newEnumValue(&c.storage, "file", "memory", "file"), "storage", "JetStream storage (memory/file) for the \"benchstream\" stream")
+		f.Flags().IntVar(&c.replicas, "replicas", 1, "Number of replicas for the \"benchstream\" stream")
+		f.Flags().StringVar(&c.streamMaxBytesString, "maxbytes", "1GB", "The maximum size of the stream or KV bucket in bytes")
+		f.Flags().BoolVar(&c.deDuplication, "dedup", false, "Sets a message id in the header to use JS Publish de-duplication")
+		f.Flags().DurationVar(&c.deDuplicationWindow, "dedupwindow", 2*time.Minute, "Sets the duration of the stream's deduplication functionality")
+		f.Flags().BoolVar(&c.purge, "purge", false, "Purge the stream before running")
+		f.Flags().BoolVar(&c.persistModeAsync, "persistasync", false, "Set the persistence mode for the steam to asynchronous (only for R1 streams)")
 	}
 
-	addKVPutFlags := func(f *fisk.CmdClause) {
-		f.Flag("storage", "JetStream storage (memory/file) for the \"benchstream\" bucket").Default("file").EnumVar(&c.storage, "memory", "file")
-		f.Flag("replicas", "Number of replicas for the \"benchstream\" bucket").Default("1").IntVar(&c.replicas)
-		f.Flag("maxbytes", "The maximum size of the stream or KV bucket in bytes").Default("1GB").StringVar(&c.streamMaxBytesString)
-		f.Flag("history", "History depth for the bucket in KV mode").Default("1").Uint8Var(&c.history)
-		f.Flag("purge", "Purge the stream before running").UnNegatableBoolVar(&c.purge)
-		f.Flag("randomize", "Randomly put messages using keys between 0 and this number (set to 0 for sequential access)").Default("0").IntVar(&c.randomize)
+	addKVPutFlags := func(f *cobra.Command) {
+		f.Flags().Var(newEnumValue(&c.storage, "file", "memory", "file"), "storage", "JetStream storage (memory/file) for the \"benchstream\" bucket")
+		f.Flags().IntVar(&c.replicas, "replicas", 1, "Number of replicas for the \"benchstream\" bucket")
+		f.Flags().StringVar(&c.streamMaxBytesString, "maxbytes", "1GB", "The maximum size of the stream or KV bucket in bytes")
+		f.Flags().Uint8Var(&c.history, "history", 1, "History depth for the bucket in KV mode")
+		f.Flags().BoolVar(&c.purge, "purge", false, "Purge the stream before running")
+		f.Flags().IntVar(&c.randomize, "randomize", 0, "Randomly put messages using keys between 0 and this number (set to 0 for sequential access)")
 	}
 
-	benchCommand := app.Command("bench", "Benchmark utility")
+	benchCommand := addCommand(app, "bench", "Benchmark utility")
 	addCheat("bench", benchCommand)
 
-	//benchCommand.HelpLong(benchHelp)
+	//benchCommand.Long = benchHelp
 
-	corePub := benchCommand.Command("pub", "Publish Core NATS messages").Action(c.pubAction)
-	corePub.Arg("subject", "Subject to use for the benchmark").Required().StringVar(&c.subject)
-	corePub.Flag("sleep", "Sleep for the specified interval between publications").Default("0s").PlaceHolder("DURATION").DurationVar(&c.sleep)
+	corePub := addCommand(benchCommand, "pub", "Publish Core NATS messages")
+	corePub.RunE = c.pubAction
+	addArg(corePub, "subject", "Subject to use for the benchmark", true, "string")
+	corePub.Flags().DurationVar(&c.sleep, "sleep", 0*time.Second, "Sleep for the specified interval between publications")
+	flagPlaceholder(corePub, "sleep", "DURATION")
 	addCommonFlags(corePub)
 	addPubFlags(corePub)
 	addThroughputFlag(corePub)
 
-	coreSub := benchCommand.Command("sub", "Subscribe to Core NATS messages").Action(c.subAction)
-	coreSub.Arg("subject", "Subject to use for the benchmark").Required().StringVar(&c.subject)
-	coreSub.Flag("multisubject", "Multi-subject mode, each message is published on a subject that includes the publisher's message sequence number as a token").UnNegatableBoolVar(&c.multiSubject)
+	coreSub := addCommand(benchCommand, "sub", "Subscribe to Core NATS messages")
+	coreSub.RunE = c.subAction
+	addArg(coreSub, "subject", "Subject to use for the benchmark", true, "string")
+	coreSub.Flags().BoolVar(&c.multiSubject, "multisubject", false, "Multi-subject mode, each message is published on a subject that includes the publisher's message sequence number as a token")
 	addCommonFlags(coreSub)
 
-	microService := benchCommand.Command("service", "Micro-service mode")
-	microService.Flag("sleep", "Sleep for the specified interval between requests or before replying to the request").Default("0s").PlaceHolder("DURATION").DurationVar(&c.sleep)
+	microService := addCommand(benchCommand, "service", "Micro-service mode")
+	microService.Flags().DurationVar(&c.sleep, "sleep", 0*time.Second, "Sleep for the specified interval between requests or before replying to the request")
+	flagPlaceholder(microService, "sleep", "DURATION")
 	addCommonFlags(microService)
 
-	request := microService.Command("request", "Send a request and wait for its reply").Action(c.requestAction)
-	request.Help("Send a request and wait for a reply")
-	request.Arg("subject", "Subject to use for the benchmark").Required().StringVar(&c.subject)
-	request.Flag("payload", "File containing the payload to send").ExistingFileVar(&c.payloadFilename)
-	request.Flag("header", "Adds headers to the message using K:V format").Short('H').StringsVar(&c.hdrs)
+	request := addCommand(microService, "request", "Send a request and wait for its reply")
+	request.RunE = c.requestAction
+	request.Long = "Send a request and wait for a reply"
+	addArg(request, "subject", "Subject to use for the benchmark", true, "string")
+	request.Flags().Var(newExistingFileValue(&c.payloadFilename), "payload", "File containing the payload to send")
+	request.Flags().StringArrayVarP(&c.hdrs, "header", "H", nil, "Adds headers to the message using K:V format")
 	addThroughputFlag(request)
 	// TODO: support randomized payload data
 
-	reply := microService.Command("serve", "Service requests").Action(c.serveAction)
-	reply.Arg("subject", "Subject to use for the benchmark").Required().StringVar(&c.subject)
+	reply := addCommand(microService, "serve", "Service requests")
+	reply.RunE = c.serveAction
+	addArg(reply, "subject", "Subject to use for the benchmark", true, "string")
 
-	jsCommand := benchCommand.Command("js", "JetStream benchmark commands")
+	jsCommand := addCommand(benchCommand, "js", "JetStream benchmark commands")
 	addCommonFlags(jsCommand)
 	addJSCommonFlags(jsCommand)
 
-	jspub := jsCommand.Command("pub", "Publish JetStream messages")
-	jssyncpub := jspub.Command("sync", "Use synchronous JetStream publish").Action(c.jspubSyncAction)
-	jssyncpub.Arg("subject", "Subject to use for the benchmark").Required().StringVar(&c.subject)
+	jspub := addCommand(jsCommand, "pub", "Publish JetStream messages")
+	jssyncpub := addCommand(jspub, "sync", "Use synchronous JetStream publish")
+	jssyncpub.RunE = c.jspubSyncAction
+	addArg(jssyncpub, "subject", "Subject to use for the benchmark", true, "string")
 	addPubFlags(jssyncpub)
 	addJSPubFlags(jssyncpub)
 	addThroughputFlag(jssyncpub)
 
-	jsasyncpub := jspub.Command("async", "Use asynchronous JetStream publish").Action(c.jspubAsyncAction)
-	jsasyncpub.Arg("subject", "Subject to use for the benchmark").Required().StringVar(&c.subject)
-	jsasyncpub.Flag("batch", "Sets the number of asynchronous operations per batch").Default("500").IntVar(&c.batchSize)
+	jsasyncpub := addCommand(jspub, "async", "Use asynchronous JetStream publish")
+	jsasyncpub.RunE = c.jspubAsyncAction
+	addArg(jsasyncpub, "subject", "Subject to use for the benchmark", true, "string")
+	jsasyncpub.Flags().IntVar(&c.batchSize, "batch", 500, "Sets the number of asynchronous operations per batch")
 	addPubFlags(jsasyncpub)
 	addJSPubFlags(jsasyncpub)
 	addThroughputFlag(jsasyncpub)
 
-	jsbatchatomicpub := jspub.Command("atomic", "Use atomic batch JetStream publish").Alias("batch").Action(c.jspubBatchAtomicAction)
-	jsbatchatomicpub.Arg("subject", "Subject to use for the benchmark").Required().StringVar(&c.subject)
-	jsbatchatomicpub.Flag("batch", "Sets the size of the batches").Default("500").IntVar(&c.batchSize)
+	jsbatchatomicpub := addCommand(jspub, "atomic", "Use atomic batch JetStream publish")
+	jsbatchatomicpub.Aliases = []string{"batch"}
+	jsbatchatomicpub.RunE = c.jspubBatchAtomicAction
+	addArg(jsbatchatomicpub, "subject", "Subject to use for the benchmark", true, "string")
+	jsbatchatomicpub.Flags().IntVar(&c.batchSize, "batch", 500, "Sets the size of the batches")
 	addPubFlags(jsbatchatomicpub)
 	addJSPubFlags(jsbatchatomicpub)
 	addThroughputFlag(jsbatchatomicpub)
 
-	jsbatchfastpub := jspub.Command("fast", "Use fast batch JetStream publish").Action(c.jspubBatchFastAction)
-	jsbatchfastpub.Arg("subject", "Subject to use for the benchmark").Required().StringVar(&c.subject)
-	jsbatchfastpub.Flag("batch", "Sets the size of the batches").Default("500").IntVar(&c.batchSize)
-	jsbatchfastpub.Flag("max-outstanding-acks", "Sets the max outstanding acks for fast publishing").Default("1").Uint16Var(&c.maxOutstandingAcks)
+	jsbatchfastpub := addCommand(jspub, "fast", "Use fast batch JetStream publish")
+	jsbatchfastpub.RunE = c.jspubBatchFastAction
+	addArg(jsbatchfastpub, "subject", "Subject to use for the benchmark", true, "string")
+	jsbatchfastpub.Flags().IntVar(&c.batchSize, "batch", 500, "Sets the size of the batches")
+	jsbatchfastpub.Flags().Uint16Var(&c.maxOutstandingAcks, "max-outstanding-acks", 1, "Sets the max outstanding acks for fast publishing")
 	addPubFlags(jsbatchfastpub)
 	addJSPubFlags(jsbatchfastpub)
 	addThroughputFlag(jsbatchfastpub)
 
-	jsOrdered := jsCommand.Command("ordered", "Consume JetStream messages from a consumer using an ephemeral ordered consumer").Action(c.jsOrderedAction)
-	jsOrdered.Flag("batch", "Sets the max number of messages that can be buffered in the client").Default("500").IntVar(&c.batchSize)
-	jsOrdered.Flag("purge", "Purge the stream before running").UnNegatableBoolVar(&c.purge)
-	jsOrdered.Flag("filter", "Filter Stream by subjects").PlaceHolder("SUBJECTS").StringsVar(&c.filterSubjects)
+	jsOrdered := addCommand(jsCommand, "ordered", "Consume JetStream messages from a consumer using an ephemeral ordered consumer")
+	jsOrdered.RunE = c.jsOrderedAction
+	jsOrdered.Flags().IntVar(&c.batchSize, "batch", 500, "Sets the max number of messages that can be buffered in the client")
+	jsOrdered.Flags().BoolVar(&c.purge, "purge", false, "Purge the stream before running")
+	jsOrdered.Flags().StringArrayVar(&c.filterSubjects, "filter", nil, "Filter Stream by subjects")
+	flagPlaceholder(jsOrdered, "filter", "SUBJECTS")
 
-	jsConsume := jsCommand.Command("consume", "Consume JetStream messages from a durable consumer using a callback").Action(c.jsConsumeAction)
+	jsConsume := addCommand(jsCommand, "consume", "Consume JetStream messages from a durable consumer using a callback")
+	jsConsume.RunE = c.jsConsumeAction
 	addJSConsumerFlags(jsConsume)
 
-	jsFetch := jsCommand.Command("fetch", "Consume JetStream messages from a durable consumer using fetch").Action(c.jsFetchAction)
+	jsFetch := addCommand(jsCommand, "fetch", "Consume JetStream messages from a durable consumer using fetch")
+	jsFetch.RunE = c.jsFetchAction
 	addJSConsumerFlags(jsFetch)
 
-	jsGet := jsCommand.Command("get", "Retrieve messages from JetStream using gets")
-	_ = jsGet.Command("sync", "Use synchronous JetStream get").Action(c.jsSyncGetAction)
-	jsGetBatchedDirect := jsGet.Command("batch", "Use batched JetStream direct get").Action(c.jsBatchedDirectAction)
-	jsGetBatchedDirect.Flag("batch", "Sets the max number of messages that can be buffered in the client").Default("500").IntVar(&c.batchSize)
-	jsGetBatchedDirect.Flag("filter", "Filter for the messages").Default(">").StringVar(&c.filterSubject)
+	jsGet := addCommand(jsCommand, "get", "Retrieve messages from JetStream using gets")
+	jsGetSync := addCommand(jsGet, "sync", "Use synchronous JetStream get")
+	jsGetSync.RunE = c.jsSyncGetAction
+	jsGetBatchedDirect := addCommand(jsGet, "batch", "Use batched JetStream direct get")
+	jsGetBatchedDirect.RunE = c.jsBatchedDirectAction
+	jsGetBatchedDirect.Flags().IntVar(&c.batchSize, "batch", 500, "Sets the max number of messages that can be buffered in the client")
+	jsGetBatchedDirect.Flags().StringVar(&c.filterSubject, "filter", ">", "Filter for the messages")
 
-	kvCommand := benchCommand.Command("kv", "KV benchmark operations")
+	kvCommand := addCommand(benchCommand, "kv", "KV benchmark operations")
 	addCommonFlags(kvCommand)
-	kvCommand.Flag("bucket", "The bucket to use for the benchmark").Default(bench.DefaultBucketName).StringVar(&c.streamOrBucketName)
-	kvCommand.Flag("sleep", "Sleep for the specified interval after putting each message").Default("0s").PlaceHolder("DURATION").DurationVar(&c.sleep)
+	kvCommand.Flags().StringVar(&c.streamOrBucketName, "bucket", bench.DefaultBucketName, "The bucket to use for the benchmark")
+	kvCommand.Flags().DurationVar(&c.sleep, "sleep", 0*time.Second, "Sleep for the specified interval after putting each message")
+	flagPlaceholder(kvCommand, "sleep", "DURATION")
 
-	kvput := kvCommand.Command("put", "Put messages in a KV bucket").Action(c.kvPutAction)
+	kvput := addCommand(kvCommand, "put", "Put messages in a KV bucket")
+	kvput.RunE = c.kvPutAction
 	// TODO: support randomized payload data
 	addKVPutFlags(kvput)
 	addThroughputFlag(kvput)
 
-	kvget := kvCommand.Command("get", "Get messages from a KV bucket").Action(c.kvGetAction)
-	kvget.Flag("randomize", "Randomly get messages using keys between 0 and this number (set to 0 for sequential access)").Default("0").IntVar(&c.randomize)
+	kvget := addCommand(kvCommand, "get", "Get messages from a KV bucket")
+	kvget.RunE = c.kvGetAction
+	kvget.Flags().IntVar(&c.randomize, "randomize", 0, "Randomly get messages using keys between 0 and this number (set to 0 for sequential access)")
 
-	oldJSCommand := benchCommand.Command("oldjs", "JetStream benchmark commands using the old JS API").Hidden()
+	oldJSCommand := addCommand(benchCommand, "oldjs", "JetStream benchmark commands using the old JS API")
+	oldJSCommand.Hidden = true
 	addCommonFlags(oldJSCommand)
 	addJSCommonFlags(oldJSCommand)
 
-	oldJSOrdered := oldJSCommand.Command("ordered", "Consume JetStream messages from a consumer using an old JS API's ephemeral ordered consumer").Action(c.oldjsOrderedAction)
-	oldJSOrdered.Arg("subject", "Subject to use for the benchmark").Required().StringVar(&c.subject)
-	oldJSOrdered.Flag("multisubject", "Multi-subject mode, each message is published on a subject that includes the publisher's message sequence number as a token").UnNegatableBoolVar(&c.multiSubject)
+	oldJSOrdered := addCommand(oldJSCommand, "ordered", "Consume JetStream messages from a consumer using an old JS API's ephemeral ordered consumer")
+	oldJSOrdered.RunE = c.oldjsOrderedAction
+	addArg(oldJSOrdered, "subject", "Subject to use for the benchmark", true, "string")
+	oldJSOrdered.Flags().BoolVar(&c.multiSubject, "multisubject", false, "Multi-subject mode, each message is published on a subject that includes the publisher's message sequence number as a token")
 
-	oldJSPush := oldJSCommand.Command("push", "Consume JetStream messages from a consumer using an old JS API's durable push consumer").Action(c.oldjsPushAction)
-	oldJSPush.Arg("subject", "Subject to use for the benchmark").Required().StringVar(&c.subject)
-	oldJSPush.Flag("consumer", "Specify the durable consumer name to use").Default(bench.DefaultDurableConsumerName).StringVar(&c.consumerName)
-	oldJSPush.Flag("maxacks", "Sets the max ack pending value, adjusts for the number of clients").Default("500").IntVar(&c.batchSize)
-	oldJSPush.Flag("ack", "Uses explicit message acknowledgement or not for the consumer").Default("true").BoolVar(&c.ack)
-	oldJSPush.Flag("doubleack", "Synchronously acknowledge messages, waiting for a reply from the server").Default("false").BoolVar(&c.doubleAck)
+	oldJSPush := addCommand(oldJSCommand, "push", "Consume JetStream messages from a consumer using an old JS API's durable push consumer")
+	oldJSPush.RunE = c.oldjsPushAction
+	addArg(oldJSPush, "subject", "Subject to use for the benchmark", true, "string")
+	oldJSPush.Flags().StringVar(&c.consumerName, "consumer", bench.DefaultDurableConsumerName, "Specify the durable consumer name to use")
+	oldJSPush.Flags().IntVar(&c.batchSize, "maxacks", 500, "Sets the max ack pending value, adjusts for the number of clients")
+	negatableBoolVar(oldJSPush, &c.ack, "ack", true, "Uses explicit message acknowledgement or not for the consumer")
+	negatableBoolVar(oldJSPush, &c.doubleAck, "doubleack", false, "Synchronously acknowledge messages, waiting for a reply from the server")
 
-	oldJSPull := oldJSCommand.Command("pull", "Consume JetStream messages from a consumer using an old JS API's durable pull consumer").Action(c.oldjsPullAction)
-	oldJSPull.Arg("subject", "Subject to use for the benchmark").Required().StringVar(&c.subject)
-	oldJSPull.Flag("consumer", "Specify the durable consumer name to use").Default(bench.DefaultDurableConsumerName).StringVar(&c.consumerName)
-	oldJSPull.Flag("batch", "Sets the fetch size for the consumer").Default("500").IntVar(&c.batchSize)
-	oldJSPull.Flag("ack", "Uses explicit message acknowledgement or not for the consumer").Default("true").BoolVar(&c.ack)
-	oldJSPull.Flag("doubleack", "Synchronously acknowledge messages, waiting for a reply from the server").Default("false").BoolVar(&c.doubleAck)
+	oldJSPull := addCommand(oldJSCommand, "pull", "Consume JetStream messages from a consumer using an old JS API's durable pull consumer")
+	oldJSPull.RunE = c.oldjsPullAction
+	addArg(oldJSPull, "subject", "Subject to use for the benchmark", true, "string")
+	oldJSPull.Flags().StringVar(&c.consumerName, "consumer", bench.DefaultDurableConsumerName, "Specify the durable consumer name to use")
+	oldJSPull.Flags().IntVar(&c.batchSize, "batch", 500, "Sets the fetch size for the consumer")
+	negatableBoolVar(oldJSPull, &c.ack, "ack", true, "Uses explicit message acknowledgement or not for the consumer")
+	negatableBoolVar(oldJSPull, &c.doubleAck, "doubleack", false, "Synchronously acknowledge messages, waiting for a reply from the server")
 
 }
 
@@ -643,7 +671,9 @@ func (c *benchCmd) purgeStream() error {
 }
 
 // Actions for the various bench commands below
-func (c *benchCmd) pubAction(_ *fisk.ParseContext) error {
+func (c *benchCmd) pubAction(_ *cobra.Command, args []string) error {
+	c.subject = args[0]
+
 	err := c.processActionArgs()
 	if err != nil {
 		return err
@@ -715,7 +745,9 @@ func (c *benchCmd) pubAction(_ *fisk.ParseContext) error {
 	return nil
 }
 
-func (c *benchCmd) subAction(_ *fisk.ParseContext) error {
+func (c *benchCmd) subAction(_ *cobra.Command, args []string) error {
+	c.subject = args[0]
+
 	err := c.processActionArgs()
 	if err != nil {
 		return err
@@ -778,7 +810,9 @@ func (c *benchCmd) subAction(_ *fisk.ParseContext) error {
 	return nil
 }
 
-func (c *benchCmd) requestAction(_ *fisk.ParseContext) error {
+func (c *benchCmd) requestAction(_ *cobra.Command, args []string) error {
+	c.subject = args[0]
+
 	err := c.processActionArgs()
 	if err != nil {
 		return err
@@ -849,7 +883,9 @@ func (c *benchCmd) requestAction(_ *fisk.ParseContext) error {
 	return nil
 }
 
-func (c *benchCmd) serveAction(_ *fisk.ParseContext) error {
+func (c *benchCmd) serveAction(_ *cobra.Command, args []string) error {
+	c.subject = args[0]
+
 	// reply mode is open-ended for the number of messages
 	err := c.processActionArgs()
 	if err != nil {
@@ -909,26 +945,30 @@ func (c *benchCmd) serveAction(_ *fisk.ParseContext) error {
 	return nil
 }
 
-func (c *benchCmd) jspubSyncAction(pc *fisk.ParseContext) error {
-	return c.jspubActions(pc, bench.TypeJSPubSync)
+func (c *benchCmd) jspubSyncAction(_ *cobra.Command, args []string) error {
+	c.subject = args[0]
+	return c.jspubActions(bench.TypeJSPubSync)
 }
 
-func (c *benchCmd) jspubAsyncAction(pc *fisk.ParseContext) error {
-	return c.jspubActions(pc, bench.TypeJSPubAsync)
+func (c *benchCmd) jspubAsyncAction(_ *cobra.Command, args []string) error {
+	c.subject = args[0]
+	return c.jspubActions(bench.TypeJSPubAsync)
 }
 
-func (c *benchCmd) jspubBatchAtomicAction(pc *fisk.ParseContext) error {
-	return c.jspubActions(pc, bench.TypeJSPubBatchAtomic)
+func (c *benchCmd) jspubBatchAtomicAction(_ *cobra.Command, args []string) error {
+	c.subject = args[0]
+	return c.jspubActions(bench.TypeJSPubBatchAtomic)
 }
 
-func (c *benchCmd) jspubBatchFastAction(pc *fisk.ParseContext) error {
+func (c *benchCmd) jspubBatchFastAction(_ *cobra.Command, args []string) error {
+	c.subject = args[0]
 	if c.maxOutstandingAcks == 0 {
 		return fmt.Errorf("--max-outstanding-acks must be >= 1")
 	}
-	return c.jspubActions(pc, bench.TypeJSPubBatchFast)
+	return c.jspubActions(bench.TypeJSPubBatchFast)
 }
 
-func (c *benchCmd) jspubActions(_ *fisk.ParseContext, jsPubType string) error {
+func (c *benchCmd) jspubActions(jsPubType string) error {
 	err := c.processActionArgs()
 	if err != nil {
 		return err
@@ -1075,7 +1115,7 @@ func (c *benchCmd) jspubActions(_ *fisk.ParseContext, jsPubType string) error {
 	return nil
 }
 
-func (c *benchCmd) jsOrderedAction(_ *fisk.ParseContext) error {
+func (c *benchCmd) jsOrderedAction(_ *cobra.Command, _ []string) error {
 	err := c.processActionArgs()
 	if err != nil {
 		return err
@@ -1143,7 +1183,7 @@ func (c *benchCmd) jsOrderedAction(_ *fisk.ParseContext) error {
 	return nil
 }
 
-func (c *benchCmd) jsConsumeAction(_ *fisk.ParseContext) error {
+func (c *benchCmd) jsConsumeAction(_ *cobra.Command, _ []string) error {
 	err := c.processActionArgs()
 	if err != nil {
 		return err
@@ -1233,7 +1273,7 @@ func (c *benchCmd) jsConsumeAction(_ *fisk.ParseContext) error {
 	return nil
 }
 
-func (c *benchCmd) jsFetchAction(_ *fisk.ParseContext) error {
+func (c *benchCmd) jsFetchAction(_ *cobra.Command, _ []string) error {
 	err := c.processActionArgs()
 	if err != nil {
 		return err
@@ -1323,15 +1363,15 @@ func (c *benchCmd) jsFetchAction(_ *fisk.ParseContext) error {
 	return nil
 }
 
-func (c *benchCmd) jsSyncGetAction(pc *fisk.ParseContext) error {
-	return c.jsGetAction(pc, bench.TypeJSGetSync)
+func (c *benchCmd) jsSyncGetAction(_ *cobra.Command, _ []string) error {
+	return c.jsGetAction(bench.TypeJSGetSync)
 }
 
-func (c *benchCmd) jsBatchedDirectAction(pc *fisk.ParseContext) error {
-	return c.jsGetAction(pc, bench.TypeJSGetDirectBatched)
+func (c *benchCmd) jsBatchedDirectAction(_ *cobra.Command, _ []string) error {
+	return c.jsGetAction(bench.TypeJSGetDirectBatched)
 }
 
-func (c *benchCmd) jsGetAction(_ *fisk.ParseContext, benchType string) error {
+func (c *benchCmd) jsGetAction(benchType string) error {
 	err := c.processActionArgs()
 	if err != nil {
 		return err
@@ -1405,7 +1445,7 @@ func (c *benchCmd) jsGetAction(_ *fisk.ParseContext, benchType string) error {
 	return nil
 }
 
-func (c *benchCmd) kvPutAction(_ *fisk.ParseContext) error {
+func (c *benchCmd) kvPutAction(_ *cobra.Command, _ []string) error {
 	err := c.processActionArgs()
 	if err != nil {
 		return err
@@ -1503,7 +1543,7 @@ func (c *benchCmd) kvPutAction(_ *fisk.ParseContext) error {
 	return nil
 }
 
-func (c *benchCmd) kvGetAction(_ *fisk.ParseContext) error {
+func (c *benchCmd) kvGetAction(_ *cobra.Command, _ []string) error {
 	err := c.processActionArgs()
 	if err != nil {
 		return err
@@ -1567,7 +1607,9 @@ func (c *benchCmd) kvGetAction(_ *fisk.ParseContext) error {
 	return nil
 }
 
-func (c *benchCmd) oldjsOrderedAction(_ *fisk.ParseContext) error {
+func (c *benchCmd) oldjsOrderedAction(_ *cobra.Command, args []string) error {
+	c.subject = args[0]
+
 	err := c.processActionArgs()
 	if err != nil {
 		return err
@@ -1635,7 +1677,9 @@ func (c *benchCmd) oldjsOrderedAction(_ *fisk.ParseContext) error {
 	return nil
 }
 
-func (c *benchCmd) oldjsPushAction(_ *fisk.ParseContext) error {
+func (c *benchCmd) oldjsPushAction(_ *cobra.Command, args []string) error {
+	c.subject = args[0]
+
 	err := c.processActionArgs()
 	if err != nil {
 		return err
@@ -1752,7 +1796,9 @@ func (c *benchCmd) oldjsPushAction(_ *fisk.ParseContext) error {
 	return nil
 }
 
-func (c *benchCmd) oldjsPullAction(_ *fisk.ParseContext) error {
+func (c *benchCmd) oldjsPullAction(_ *cobra.Command, args []string) error {
+	c.subject = args[0]
+
 	err := c.processActionArgs()
 	if err != nil {
 		return err

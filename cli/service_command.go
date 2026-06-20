@@ -36,7 +36,7 @@ import (
 	"github.com/nats-io/nats.go/micro"
 	iu "github.com/nats-io/natscli/internal/util"
 
-	"github.com/choria-io/fisk"
+	"github.com/spf13/cobra"
 )
 
 type serviceCmd struct {
@@ -63,47 +63,58 @@ type serviceCmd struct {
 func configureServiceCommand(app commandHost) {
 	c := &serviceCmd{hdrs: map[string]string{}}
 
-	mc := app.Command("service", "Services discovery and management").Alias("micro")
+	mc := addCommand(app, "service", "Services discovery and management")
+	mc.Aliases = []string{"micro"}
 
-	ls := mc.Command("list", "List known Services").Alias("ls").Alias("l").Action(c.listAction)
-	ls.Tag("scope:user", "impact:ro")
-	ls.Arg("service", "List instances of a specific Service").PlaceHolder("NAME").StringVar(&c.name)
-	ls.Flag("json", "Show JSON output").Short('j').UnNegatableBoolVar(&c.showJSON)
+	ls := addCommand(mc, "list", "List known Services")
+	ls.Aliases = []string{"ls", "l"}
+	ls.RunE = c.listAction
+	cmdAddTags(ls, "scope:user", "impact:ro")
+	addArg(ls, "service", "List instances of a specific Service", false, "string")
+	flagPlaceholder(ls, "service", "NAME")
+	ls.Flags().BoolVarP(&c.showJSON, "json", "j", false, "Show JSON output")
 
-	info := mc.Command("info", "Show Service information").Alias("i").Action(c.infoAction)
-	info.Tag("scope:user", "impact:ro")
-	info.Arg("service", "Service to show").Required().StringVar(&c.name)
-	info.Arg("id", "Show info for a specific ID").StringVar(&c.id)
-	info.Flag("endpoint", "Filter shown endpoints using a regular expression").Short('e').RegexpVar(&c.endpoint)
-	info.Flag("json", "Show JSON output").Short('j').UnNegatableBoolVar(&c.showJSON)
+	info := addCommand(mc, "info", "Show Service information")
+	info.Aliases = []string{"i"}
+	info.RunE = c.infoAction
+	cmdAddTags(info, "scope:user", "impact:ro")
+	addArg(info, "service", "Service to show", true, "string")
+	addArg(info, "id", "Show info for a specific ID", false, "string")
+	info.Flags().VarP(newRegexpValue(&c.endpoint), "endpoint", "e", "Filter shown endpoints using a regular expression")
+	info.Flags().BoolVarP(&c.showJSON, "json", "j", false, "Show JSON output")
 
-	stats := mc.Command("stats", "Report Service statistics").Action(c.statsAction)
-	stats.Tag("scope:user", "impact:ro")
-	stats.Arg("service", "Service to show").Required().StringVar(&c.name)
-	stats.Arg("id", "Show info for a specific ID").StringVar(&c.id)
-	stats.Flag("json", "Show JSON output").Short('j').UnNegatableBoolVar(&c.showJSON)
+	stats := addCommand(mc, "stats", "Report Service statistics")
+	stats.RunE = c.statsAction
+	cmdAddTags(stats, "scope:user", "impact:ro")
+	addArg(stats, "service", "Service to show", true, "string")
+	addArg(stats, "id", "Show info for a specific ID", false, "string")
+	stats.Flags().BoolVarP(&c.showJSON, "json", "j", false, "Show JSON output")
 
-	ping := mc.Command("ping", "Sends a ping to all Services").Action(c.pingAction)
-	ping.Tag("scope:user", "impact:rw")
-	ping.Arg("service", "Service to show").StringVar(&c.name)
+	ping := addCommand(mc, "ping", "Sends a ping to all Services")
+	ping.RunE = c.pingAction
+	cmdAddTags(ping, "scope:user", "impact:rw")
+	addArg(ping, "service", "Service to show", false, "string")
 
-	req := mc.Command("request", "Send a request to a service endpoint").Alias("req").Action(c.requestAction)
-	req.Tag("scope:user", "impact:rw")
-	req.Arg("service", "Service name").Required().StringVar(&c.name)
-	req.Arg("endpoint", "Endpoint name").Required().StringVar(&c.reqEndpoint)
-	req.Arg("payload", "Request payload").IsSetByUser(&c.reqBodyIsSet).StringVar(&c.reqBody)
-	req.Flag("header", "Headers in K:V form").Short('H').StringsVar(&c.reqHeaders)
-	req.Flag("raw", "Show only the reply body").Short('r').UnNegatableBoolVar(&c.reqRaw)
-	req.Flag("count", "Send the request N times").Default("1").IntVar(&c.reqCount)
-	req.Flag("translate", "Pipe each reply body through CMD before output").StringVar(&c.reqTranslate)
-	req.Flag("templates", "Enables template functions in body and subject").Default("true").BoolVar(&c.reqTemplates)
-	req.Flag("force-stdin", "Force reading payload from stdin").UnNegatableBoolVar(&c.reqForceStdin)
-	req.Flag("send-on", "When to send data from stdin: 'eof' (default) or 'newline'").Default("eof").EnumVar(&c.reqSendOn, "newline", "eof")
+	req := addCommand(mc, "request", "Send a request to a service endpoint")
+	req.Aliases = []string{"req"}
+	req.RunE = c.requestAction
+	cmdAddTags(req, "scope:user", "impact:rw")
+	addArg(req, "service", "Service name", true, "string")
+	addArg(req, "endpoint", "Endpoint name", true, "string")
+	addArg(req, "payload", "Request payload", false, "string")
+	req.Flags().StringArrayVarP(&c.reqHeaders, "header", "H", nil, "Headers in K:V form")
+	req.Flags().BoolVarP(&c.reqRaw, "raw", "r", false, "Show only the reply body")
+	req.Flags().IntVar(&c.reqCount, "count", 1, "Send the request N times")
+	req.Flags().StringVar(&c.reqTranslate, "translate", "", "Pipe each reply body through CMD before output")
+	negatableBoolVar(req, &c.reqTemplates, "templates", true, "Enables template functions in body and subject")
+	req.Flags().BoolVar(&c.reqForceStdin, "force-stdin", false, "Force reading payload from stdin")
+	req.Flags().Var(newEnumValue(&c.reqSendOn, "eof", "newline", "eof"), "send-on", "When to send data from stdin: 'eof' (default) or 'newline'")
 
-	echo := mc.Command("serve", "Runs a demo Service").Action(c.serveAction)
-	echo.Tag("scope:user", "impact:ro")
-	echo.Arg("name", "A name for the service to run on").Required().StringVar(&c.name)
-	echo.Flag("header", "Headers to add to responses using K:V format").Short('H').StringMapVar(&c.hdrs)
+	echo := addCommand(mc, "serve", "Runs a demo Service")
+	echo.RunE = c.serveAction
+	cmdAddTags(echo, "scope:user", "impact:ro")
+	addArg(echo, "name", "A name for the service to run on", true, "string")
+	echo.Flags().VarP(newStringMapValue(&c.hdrs), "header", "H", "Headers to add to responses using K:V format")
 }
 
 func init() {
@@ -135,7 +146,9 @@ func (c *serviceCmd) echoHandler(req micro.Request) {
 	req.Respond(req.Data(), micro.WithHeaders(micro.Headers(hdr)))
 }
 
-func (c *serviceCmd) serveAction(_ *fisk.ParseContext) error {
+func (c *serviceCmd) serveAction(_ *cobra.Command, args []string) error {
+	c.name = args[0]
+
 	var err error
 	var combinedPayload int
 	var mu sync.Mutex
@@ -307,7 +320,12 @@ func (c *serviceCmd) resolveEndpoint(info *micro.Info, name string) (*micro.Endp
 	return nil, fmt.Errorf("service %q has no endpoint %q (available: %s)", info.Name, name, strings.Join(names, ", "))
 }
 
-func (c *serviceCmd) requestAction(_ *fisk.ParseContext) error {
+func (c *serviceCmd) requestAction(_ *cobra.Command, args []string) error {
+	c.name = args[0]
+	c.reqEndpoint = args[1]
+	c.reqBody = argValue(args, 2)
+	c.reqBodyIsSet = len(args) > 2
+
 	nc, _, err := prepareHelper("", natsOpts()...)
 	if err != nil {
 		return fmt.Errorf("setup failed: %v", err)
@@ -346,10 +364,12 @@ func (c *serviceCmd) requestAction(_ *fisk.ParseContext) error {
 		sendOn:     c.reqSendOn,
 		templates:  c.reqTemplates,
 	}
-	return rc.requestAction(nil)
+	return rc.requestAction(nil, nil)
 }
 
-func (c *serviceCmd) pingAction(_ *fisk.ParseContext) error {
+func (c *serviceCmd) pingAction(_ *cobra.Command, args []string) error {
+	c.name = argValue(args, 0)
+
 	nc, _, err := prepareHelper("", natsOpts()...)
 	if err != nil {
 		return fmt.Errorf("setup failed: %v", err)
@@ -388,7 +408,10 @@ func (c *serviceCmd) pingAction(_ *fisk.ParseContext) error {
 	return nil
 }
 
-func (c *serviceCmd) statsAction(_ *fisk.ParseContext) error {
+func (c *serviceCmd) statsAction(_ *cobra.Command, args []string) error {
+	c.name = args[0]
+	c.id = argValue(args, 1)
+
 	nc, _, err := prepareHelper("", natsOpts()...)
 	if err != nil {
 		return fmt.Errorf("setup failed: %v", err)
@@ -463,7 +486,10 @@ func (c *serviceCmd) statsAction(_ *fisk.ParseContext) error {
 	return nil
 }
 
-func (c *serviceCmd) infoAction(_ *fisk.ParseContext) error {
+func (c *serviceCmd) infoAction(_ *cobra.Command, args []string) error {
+	c.name = args[0]
+	c.id = argValue(args, 1)
+
 	nc, _, err := prepareHelper("", natsOpts()...)
 	if err != nil {
 		return fmt.Errorf("setup failed: %v", err)
@@ -567,7 +593,9 @@ func (c *serviceCmd) infoAction(_ *fisk.ParseContext) error {
 	return nil
 }
 
-func (c *serviceCmd) listAction(_ *fisk.ParseContext) error {
+func (c *serviceCmd) listAction(_ *cobra.Command, args []string) error {
+	c.name = argValue(args, 0)
+
 	nc, _, err := prepareHelper("", natsOpts()...)
 	if err != nil {
 		return fmt.Errorf("setup failed: %v", err)

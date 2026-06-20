@@ -14,7 +14,7 @@
 package cli
 
 func configureSchemaCommand(app commandHost) {
-	schema := app.Command("schema", "Schema tools")
+	schema := addCommand(app, "schema", "Schema tools")
 	addCheat("schemas", schema)
 
 	configureSchemaSearchCommand(schema)

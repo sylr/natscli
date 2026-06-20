@@ -24,7 +24,7 @@ import (
 	iu "github.com/nats-io/natscli/internal/util"
 	"github.com/synadia-io/orbit.go/counters"
 
-	"github.com/choria-io/fisk"
+	"github.com/spf13/cobra"
 )
 
 type counterCmd struct {
@@ -37,37 +37,48 @@ type counterCmd struct {
 func configureCounterCommand(app commandHost) {
 	c := counterCmd{}
 
-	ctr := app.Command("counter", "Access distributed Counters").Alias("ctr")
-	ctr.HelpLong("This is an experimental command and will undergo changes in later versions")
+	ctr := addCommand(app, "counter", "Access distributed Counters")
+	ctr.Aliases = []string{"ctr"}
+	ctr.Long = "This is an experimental command and will undergo changes in later versions"
 
-	get := ctr.Command("get", "Gets the current value for a counter").Alias("g").Action(c.getAction)
-	get.Tag("scope:user", "impact:ro")
-	get.Arg("subject", "Subject to get counter for").Required().StringVar(&c.subject)
-	get.Flag("stream", "The stream name to fetch the value from").StringVar(&c.stream)
+	get := addCommand(ctr, "get", "Gets the current value for a counter")
+	get.Aliases = []string{"g"}
+	get.RunE = c.getAction
+	cmdAddTags(get, "scope:user", "impact:ro")
+	addArg(get, "subject", "Subject to get counter for", true, "string")
+	get.Flags().StringVar(&c.stream, "stream", "", "The stream name to fetch the value from")
 
-	view := ctr.Command("view", "View the full counter metadata").Alias("v").Action(c.viewAction)
-	view.Tag("scope:user", "impact:ro")
-	view.Arg("subject", "Subject to get counter for").Required().StringVar(&c.subject)
-	view.Flag("stream", "The stream name to fetch the value from").StringVar(&c.stream)
+	view := addCommand(ctr, "view", "View the full counter metadata")
+	view.Aliases = []string{"v"}
+	view.RunE = c.viewAction
+	cmdAddTags(view, "scope:user", "impact:ro")
+	addArg(view, "subject", "Subject to get counter for", true, "string")
+	view.Flags().StringVar(&c.stream, "stream", "", "The stream name to fetch the value from")
 
-	incr := ctr.Command("increment", "Increment the value of a counter").Alias("incr").Alias("i").Action(c.incrAction)
-	incr.Tag("scope:user", "impact:rw")
-	incr.Arg("subject", "Subject to get counter for").Required().StringVar(&c.subject)
-	incr.Arg("value", "The value to increment").StringVar(&c.value)
-	incr.Flag("stream", "The stream name to fetch the value from").StringVar(&c.stream)
+	incr := addCommand(ctr, "increment", "Increment the value of a counter")
+	incr.Aliases = []string{"incr", "i"}
+	incr.RunE = c.incrAction
+	cmdAddTags(incr, "scope:user", "impact:rw")
+	addArg(incr, "subject", "Subject to get counter for", true, "string")
+	addArg(incr, "value", "The value to increment", false, "string")
+	incr.Flags().StringVar(&c.stream, "stream", "", "The stream name to fetch the value from")
 
-	ls := ctr.Command("list", "List Counters in a stream").Alias("l").Alias("ls").Action(c.lsAction)
-	ls.Tag("scope:user", "impact:ro")
-	ls.Arg("subject", "Subject pattern to get counters for").StringVar(&c.subject)
-	ls.Flag("stream", "The stream name to fetch the value from").StringVar(&c.stream)
-	ls.Flag("json", "Produce JSON output").UnNegatableBoolVar(&c.json)
+	ls := addCommand(ctr, "list", "List Counters in a stream")
+	ls.Aliases = []string{"l", "ls"}
+	ls.RunE = c.lsAction
+	cmdAddTags(ls, "scope:user", "impact:ro")
+	addArg(ls, "subject", "Subject pattern to get counters for", false, "string")
+	ls.Flags().StringVar(&c.stream, "stream", "", "The stream name to fetch the value from")
+	ls.Flags().BoolVar(&c.json, "json", false, "Produce JSON output")
 }
 
 func init() {
 	registerCommand("counter", 5, configureCounterCommand)
 }
 
-func (c *counterCmd) lsAction(_ *fisk.ParseContext) error {
+func (c *counterCmd) lsAction(_ *cobra.Command, args []string) error {
+	c.subject = argValue(args, 0)
+
 	if c.stream == "" && c.subject == "" {
 		return fmt.Errorf("no stream or subject specified")
 	}
@@ -106,7 +117,9 @@ func (c *counterCmd) lsAction(_ *fisk.ParseContext) error {
 	return nil
 }
 
-func (c *counterCmd) getAction(_ *fisk.ParseContext) error {
+func (c *counterCmd) getAction(_ *cobra.Command, args []string) error {
+	c.subject = args[0]
+
 	_, ctr, err := c.getCounterManager()
 	if err != nil {
 		return err
@@ -122,7 +135,10 @@ func (c *counterCmd) getAction(_ *fisk.ParseContext) error {
 	return nil
 }
 
-func (c *counterCmd) incrAction(_ *fisk.ParseContext) error {
+func (c *counterCmd) incrAction(_ *cobra.Command, args []string) error {
+	c.subject = args[0]
+	c.value = argValue(args, 1)
+
 	_, ctr, err := c.getCounterManager()
 	if err != nil {
 		return err
@@ -144,7 +160,9 @@ func (c *counterCmd) incrAction(_ *fisk.ParseContext) error {
 	return nil
 }
 
-func (c *counterCmd) viewAction(_ *fisk.ParseContext) error {
+func (c *counterCmd) viewAction(_ *cobra.Command, args []string) error {
+	c.subject = args[0]
+
 	_, ctr, err := c.getCounterManager()
 	if err != nil {
 		return err

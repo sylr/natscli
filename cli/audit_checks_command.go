@@ -8,21 +8,23 @@ import (
 	"github.com/nats-io/jsm.go/audit"
 	iu "github.com/nats-io/natscli/internal/util"
 
-	"github.com/choria-io/fisk"
+	"github.com/spf13/cobra"
 )
 
 type auditChecksCommand struct {
 	json bool
 }
 
-func configureAuditChecksCommand(app *fisk.CmdClause) {
+func configureAuditChecksCommand(app *cobra.Command) {
 	c := &auditChecksCommand{}
 
-	checks := app.Command("checks", "List configured audit checks").Alias("ls").Action(c.checksAction)
-	checks.Flag("json", "Produce JSON output").UnNegatableBoolVar(&c.json)
+	checks := addCommand(app, "checks", "List configured audit checks")
+	checks.Aliases = []string{"ls"}
+	checks.RunE = c.checksAction
+	checks.Flags().BoolVar(&c.json, "json", false, "Produce JSON output")
 }
 
-func (c *auditChecksCommand) checksAction(_ *fisk.ParseContext) error {
+func (c *auditChecksCommand) checksAction(_ *cobra.Command, _ []string) error {
 	collection, err := audit.NewDefaultCheckCollection()
 	if err != nil {
 		return err

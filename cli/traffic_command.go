@@ -25,7 +25,7 @@ import (
 	"github.com/dustin/go-humanize"
 	"github.com/nats-io/nats.go"
 
-	"github.com/choria-io/fisk"
+	"github.com/spf13/cobra"
 )
 
 type trafficCmd struct {
@@ -90,16 +90,23 @@ func (r *rateTrackInt) Rate() int64 {
 func configureTrafficCommand(app commandHost) {
 	c := &trafficCmd{}
 
-	traffic := app.Command("traffic", "Monitor NATS network traffic").Hidden().Action(c.monitor)
-	traffic.Tag("scope:user", "impact:ro")
-	traffic.Arg("subjects", "Subjects to monitor, defaults to all").Default(">").StringVar(&c.subjects)
+	traffic := addCommand(app, "traffic", "Monitor NATS network traffic")
+	traffic.Hidden = true
+	traffic.RunE = c.monitor
+	cmdAddTags(traffic, "scope:user", "impact:ro")
+	addArgWithDefault(traffic, "subjects", "Subjects to monitor, defaults to all", ">", "string")
 }
 
 func init() {
 	registerCommand("traffic", 18, configureTrafficCommand)
 }
 
-func (c *trafficCmd) monitor(_ *fisk.ParseContext) error {
+func (c *trafficCmd) monitor(_ *cobra.Command, args []string) error {
+	c.subjects = ">"
+	if v := argValue(args, 0); v != "" {
+		c.subjects = v
+	}
+
 	nc, err := newNatsConn("", natsOpts()...)
 	if err != nil {
 		return err

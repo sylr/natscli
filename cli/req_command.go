@@ -21,8 +21,7 @@ import (
 
 	"github.com/nats-io/nats.go"
 	iu "github.com/nats-io/natscli/internal/util"
-
-	"github.com/choria-io/fisk"
+	"github.com/spf13/cobra"
 )
 
 type reqCmd struct {
@@ -68,22 +67,25 @@ Available template functions are:
    Random(min, max) random string at least min long, at most max
 `
 
-	req := app.Command("request", "Generic request-reply request utility").Alias("req").Action(c.requestAction)
-	req.Tag("scope:user", "impact:rw")
-	req.HelpLong(requestHelp)
-	req.Arg("subject", "Subject to subscribe to").Required().StringVar(&c.subject)
-	req.Arg("body", "Message body").IsSetByUser(&c.bodyIsSet).StringVar(&c.body)
-	req.Flag("wait", "Wait for a reply from a service").Short('w').Default("true").Hidden().BoolVar(&c.req)
-	req.Flag("raw", "Show just the output received").Short('r').UnNegatableBoolVar(&c.raw)
-	req.Flag("header", "Adds headers to the message using K:V format").Short('H').StringsVar(&c.hdrs)
-	req.Flag("count", "Publish multiple messages").Default("1").IntVar(&c.cnt)
-	req.Flag("replies", "Wait for multiple replies from services. 0 waits until timeout").Default("1").IntVar(&c.replyCount)
-	req.Flag("reply-timeout", "Maximum time between replies when waiting for more than one").Default("300ms").DurationVar(&c.replyTimeout)
-	req.Flag("wait-for-empty", "Wait for multiple replies until a empty message is received").UnNegatableBoolVar(&c.terminateOnEmpty)
-	req.Flag("translate", "Translate the message data by running it through the given command before output").StringVar(&c.translate)
-	req.Flag("force-stdin", "Force reading from stdin").UnNegatableBoolVar(&c.forceStdin)
-	req.Flag("send-on", "When to send data from stdin: 'eof' (default) or 'newline'").Default("eof").EnumVar(&c.sendOn, "newline", "eof")
-	req.Flag("templates", "Enables template functions in the body and subject (does not affect headers)").Default("true").BoolVar(&c.templates)
+	req := addCommand(app, "request", "Generic request-reply request utility")
+	req.Aliases = []string{"req"}
+	req.RunE = c.requestAction
+	cmdAddTags(req, "scope:user", "impact:rw")
+	req.Long = requestHelp
+	addArg(req, "subject", "Subject to subscribe to", true, "string")
+	addArg(req, "body", "Message body", false, "string")
+	negatableBoolVarP(req, &c.req, "wait", "w", true, "Wait for a reply from a service")
+	_ = req.Flags().MarkHidden("wait")
+	req.Flags().BoolVarP(&c.raw, "raw", "r", false, "Show just the output received")
+	req.Flags().StringArrayVarP(&c.hdrs, "header", "H", nil, "Adds headers to the message using K:V format")
+	req.Flags().IntVar(&c.cnt, "count", 1, "Publish multiple messages")
+	req.Flags().IntVar(&c.replyCount, "replies", 1, "Wait for multiple replies from services. 0 waits until timeout")
+	req.Flags().DurationVar(&c.replyTimeout, "reply-timeout", 300*time.Millisecond, "Maximum time between replies when waiting for more than one")
+	req.Flags().BoolVar(&c.terminateOnEmpty, "wait-for-empty", false, "Wait for multiple replies until a empty message is received")
+	req.Flags().StringVar(&c.translate, "translate", "", "Translate the message data by running it through the given command before output")
+	req.Flags().BoolVar(&c.forceStdin, "force-stdin", false, "Force reading from stdin")
+	req.Flags().Var(newEnumValue(&c.sendOn, "eof", "newline", "eof"), "send-on", "When to send data from stdin: 'eof' (default) or 'newline'")
+	negatableBoolVar(req, &c.templates, "templates", true, "Enables template functions in the body and subject (does not affect headers)")
 }
 
 func init() {
@@ -205,7 +207,16 @@ func (c *reqCmd) doReq(nc *nats.Conn, pub *iu.Publisher) error {
 	return nil
 }
 
-func (c *reqCmd) requestAction(_ *fisk.ParseContext) error {
+func (c *reqCmd) requestAction(cmd *cobra.Command, args []string) error {
+	// When invoked as a command the positional args carry the subject/body;
+	// other callers (e.g. service request) pre-populate the fields and pass
+	// no args, so only bind when args are present.
+	if len(args) > 0 {
+		c.subject = args[0]
+		c.body = argValue(args, 1)
+		c.bodyIsSet = len(args) > 1
+	}
+
 	ctx, cancel := signal.NotifyContext(ctx, syscall.SIGTERM, syscall.SIGINT, syscall.SIGQUIT)
 	defer cancel()
 

@@ -28,7 +28,7 @@ import (
 	"github.com/nats-io/nats.go"
 	iu "github.com/nats-io/natscli/internal/util"
 
-	"github.com/choria-io/fisk"
+	"github.com/spf13/cobra"
 )
 
 type traceCmd struct {
@@ -66,20 +66,24 @@ func configureTraceCommand(app commandHost) {
 		header: make(map[string]string),
 	}
 
-	trace := app.Command("trace", "Trace message delivery within an NATS network").Action(c.traceAction)
-	trace.Tag("scope:user", "impact:rw")
-	trace.Arg("subject", "The subject to publish to").Required().StringVar(&c.subject)
-	trace.Arg("payload", "The message body to send").StringVar(&c.payload)
-	trace.Flag("deliver", "Deliver the message to the final destination").UnNegatableBoolVar(&c.deliver)
-	trace.Flag("timestamp", "Show event timestamps").Short('T').UnNegatableBoolVar(&c.showTs)
-	trace.Flag("header", "Adds headers to the trace message using K:V format").Short('H').StringMapVar(&c.header)
+	trace := addCommand(app, "trace", "Trace message delivery within an NATS network")
+	trace.RunE = c.traceAction
+	cmdAddTags(trace, "scope:user", "impact:rw")
+	addArg(trace, "subject", "The subject to publish to", true, "string")
+	addArg(trace, "payload", "The message body to send", false, "string")
+	trace.Flags().BoolVar(&c.deliver, "deliver", false, "Deliver the message to the final destination")
+	trace.Flags().BoolVarP(&c.showTs, "timestamp", "T", false, "Show event timestamps")
+	trace.Flags().VarP(newStringMapValue(&c.header), "header", "H", "Adds headers to the trace message using K:V format")
 }
 
 func init() {
 	registerCommand("trace", 0, configureTraceCommand)
 }
 
-func (c *traceCmd) traceAction(_ *fisk.ParseContext) error {
+func (c *traceCmd) traceAction(_ *cobra.Command, args []string) error {
+	c.subject = args[0]
+	c.payload = argValue(args, 1)
+
 	nc, _, err := prepareHelper("", natsOpts()...)
 	if err != nil {
 		return err

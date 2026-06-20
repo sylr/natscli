@@ -30,7 +30,6 @@ import (
 	"github.com/jedib0t/go-pretty/v6/progress"
 
 	"github.com/AlecAivazis/survey/v2"
-	"github.com/choria-io/fisk"
 	"github.com/google/shlex"
 	"github.com/nats-io/jsm.go"
 	"github.com/nats-io/jsm.go/api"
@@ -228,7 +227,7 @@ func natsOpts() []nats.Option {
 
 	if opts().Config != nil {
 		copts, err = opts().Config.NATSOptions()
-		fisk.FatalIfError(err, "configuration error")
+		fatalIfError(err, "configuration error")
 	}
 
 	connectionName := strings.TrimSpace(opts().ConnectionName)
@@ -366,14 +365,6 @@ func jsOpts() []nats.JSOpt {
 	}
 
 	return jso
-}
-
-func addCheat(name string, cmd *fisk.CmdClause) {
-	if opts().NoCheats {
-		return
-	}
-
-	cmd.CheatFile(fs, name, fmt.Sprintf("cheats/%s.md", name))
 }
 
 func newNatsConnUnlocked(servers string, copts ...nats.Option) (*nats.Conn, error) {

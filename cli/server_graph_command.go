@@ -28,7 +28,7 @@ import (
 	iu "github.com/nats-io/natscli/internal/util"
 	terminal "golang.org/x/term"
 
-	"github.com/choria-io/fisk"
+	"github.com/spf13/cobra"
 )
 
 type SrvGraphCmd struct {
@@ -36,16 +36,19 @@ type SrvGraphCmd struct {
 	js bool
 }
 
-func configureServerGraphCommand(srv *fisk.CmdClause) {
+func configureServerGraphCommand(srv commandHost) {
 	c := &SrvGraphCmd{}
 
-	graph := srv.Command("graph", "Show graphs for a single server").Action(c.graph)
-	graph.Tag("scope:system", "impact:ro")
-	graph.Arg("server", "Server ID or Name to inspect").Required().StringVar(&c.id)
-	graph.Flag("jetstream", "Draw JetStream statistics").Short('j').UnNegatableBoolVar(&c.js)
+	graph := addCommand(srv, "graph", "Show graphs for a single server")
+	graph.RunE = c.graph
+	cmdAddTags(graph, "scope:system", "impact:ro")
+	addArg(graph, "server", "Server ID or Name to inspect", true, "string")
+	graph.Flags().BoolVarP(&c.js, "jetstream", "j", false, "Draw JetStream statistics")
 }
 
-func (c *SrvGraphCmd) graph(_ *fisk.ParseContext) error {
+func (c *SrvGraphCmd) graph(_ *cobra.Command, args []string) error {
+	c.id = args[0]
+
 	if !c.js {
 		return c.graphServer()
 	}

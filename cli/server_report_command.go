@@ -19,19 +19,20 @@ import (
 	"os"
 	"os/signal"
 	"sort"
+	"strconv"
 	"syscall"
 	"time"
 
 	"github.com/nats-io/jsm.go/serverdata"
 	iu "github.com/nats-io/natscli/internal/util"
 
-	"github.com/choria-io/fisk"
 	"github.com/dustin/go-humanize"
 	"github.com/expr-lang/expr"
 	"github.com/expr-lang/expr/vm"
 	"github.com/fatih/color"
 	"github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
+	"github.com/spf13/cobra"
 )
 
 type SrvReportCmd struct {
@@ -77,112 +78,130 @@ type srvReportAccountInfo struct {
 	Server      []*server.ServerInfo `json:"server"`
 }
 
-func configureServerReportCommand(srv *fisk.CmdClause) {
+func configureServerReportCommand(srv *cobra.Command) {
 	c := &SrvReportCmd{}
 
-	report := srv.Command("report", "Report on various server metrics").Alias("rep")
-	report.Flag("reverse", "Reverse sort connections").Short('R').UnNegatableBoolVar(&c.reverse)
+	report := addCommand(srv, "report", "Report on various server metrics")
+	report.Aliases = []string{"rep"}
+	report.Flags().BoolVarP(&c.reverse, "reverse", "R", false, "Reverse sort connections")
 
-	addFilterOpts := func(cmd *fisk.CmdClause) {
-		cmd.Flag("host", "Limit the report to a specific NATS server").StringVar(&c.server)
-		cmd.Flag("cluster", "Limit the report to a specific Cluster").StringVar(&c.cluster)
-		cmd.Flag("tags", "Limit the report to nodes matching certain tags").StringsVar(&c.tags)
-		cmd.Flag("watch", "Display the results and update it every (WATCH) seconds").IntVar(&c.watchInterval)
+	addFilterOpts := func(cmd *cobra.Command) {
+		cmd.Flags().StringVar(&c.server, "host", "", "Limit the report to a specific NATS server")
+		cmd.Flags().StringVar(&c.cluster, "cluster", "", "Limit the report to a specific Cluster")
+		cmd.Flags().StringArrayVar(&c.tags, "tags", nil, "Limit the report to nodes matching certain tags")
+		cmd.Flags().IntVar(&c.watchInterval, "watch", 0, "Display the results and update it every (WATCH) seconds")
 	}
 
-	acct := report.Command("accounts", "Report on account activity").Alias("acct").Action(c.withWatcher(c.reportAccount))
-	acct.Tag("scope:system", "impact:ro")
-	acct.Arg("account", "Account to produce a report for").StringVar(&c.account)
-	acct.Arg("limit", "Limit the responses to a certain amount of servers").IntVar(&c.waitFor)
-	acct.Flag("sort", "Sort by a specific property (in-bytes,out-bytes,in-msgs,out-msgs,conns,subs)").Default("subs").EnumVar(&c.sort, "in-bytes", "out-bytes", "in-msgs", "out-msgs", "conns", "subs")
-	acct.Flag("top", "Limit results to the top results").Default("1000").IntVar(&c.topk)
+	acct := addCommand(report, "accounts", "Report on account activity")
+	acct.Aliases = []string{"acct"}
+	acct.RunE = c.withWatcher(c.reportAccount)
+	cmdAddTags(acct, "scope:system", "impact:ro")
+	addArg(acct, "account", "Account to produce a report for", false, "string")
+	addArg(acct, "limit", "Limit the responses to a certain amount of servers", false, "int")
+	acct.Flags().Var(newEnumValue(&c.sort, "subs", "in-bytes", "out-bytes", "in-msgs", "out-msgs", "conns", "subs"), "sort", "Sort by a specific property (in-bytes,out-bytes,in-msgs,out-msgs,conns,subs)")
+	acct.Flags().IntVar(&c.topk, "top", 1000, "Limit results to the top results")
 	addFilterOpts(acct)
-	acct.Flag("archive", "Read data from an archive file").StringVar(&c.archivePath)
-	acct.Flag("json", "Produce JSON output").Short('j').UnNegatableBoolVar(&c.json)
+	acct.Flags().StringVar(&c.archivePath, "archive", "", "Read data from an archive file")
+	acct.Flags().BoolVarP(&c.json, "json", "j", false, "Produce JSON output")
 
-	conns := report.Command("connections", "Report on connections").Alias("conn").Alias("connz").Alias("conns").Action(c.withWatcher(c.reportConnections))
-	conns.Tag("scope:system", "impact:ro")
-	conns.Arg("limit", "Limit the responses to a certain amount of servers").IntVar(&c.waitFor)
-	conns.Flag("account", "Limit report to a specific account").StringVar(&c.account)
-	conns.Flag("sort", "Sort by a specific property (in-bytes,out-bytes,in-msgs,out-msgs,uptime,cid,subs)").Default("subs").EnumVar(&c.sort, "in-bytes", "out-bytes", "in-msgs", "out-msgs", "uptime", "cid", "subs")
-	conns.Flag("top", "Limit results to the top results").Default("1000").IntVar(&c.topk)
-	conns.Flag("subject", "Limits responses only to those connections with matching subscription interest").StringVar(&c.subject)
-	conns.Flag("username", "Limits responses only to those connections for a specific authentication username").StringVar(&c.user)
-	conns.Flag("state", "Limits responses only to those connections that are in a specific state (open, closed, all)").Default("open").EnumVar(&c.stateFilter, "open", "closed", "all")
-	conns.Flag("closed-reason", "Filter results based on a closed reason").PlaceHolder("REASON").StringVar(&c.filterReason)
-	conns.Flag("filter", "Expression based filter for connections").StringVar(&c.filterExpression)
+	conns := addCommand(report, "connections", "Report on connections")
+	conns.Aliases = []string{"conn", "connz", "conns"}
+	conns.RunE = c.withWatcher(c.reportConnections)
+	cmdAddTags(conns, "scope:system", "impact:ro")
+	addArg(conns, "limit", "Limit the responses to a certain amount of servers", false, "int")
+	conns.Flags().StringVar(&c.account, "account", "", "Limit report to a specific account")
+	conns.Flags().Var(newEnumValue(&c.sort, "subs", "in-bytes", "out-bytes", "in-msgs", "out-msgs", "uptime", "cid", "subs"), "sort", "Sort by a specific property (in-bytes,out-bytes,in-msgs,out-msgs,uptime,cid,subs)")
+	conns.Flags().IntVar(&c.topk, "top", 1000, "Limit results to the top results")
+	conns.Flags().StringVar(&c.subject, "subject", "", "Limits responses only to those connections with matching subscription interest")
+	conns.Flags().StringVar(&c.user, "username", "", "Limits responses only to those connections for a specific authentication username")
+	conns.Flags().Var(newEnumValue(&c.stateFilter, "open", "open", "closed", "all"), "state", "Limits responses only to those connections that are in a specific state (open, closed, all)")
+	conns.Flags().StringVar(&c.filterReason, "closed-reason", "", "Filter results based on a closed reason")
+	flagPlaceholder(conns, "closed-reason", "REASON")
+	conns.Flags().StringVar(&c.filterExpression, "filter", "", "Expression based filter for connections")
 	addFilterOpts(conns)
-	conns.Flag("archive", "Read data from an archive file").StringVar(&c.archivePath)
-	conns.Flag("json", "Produce JSON output").Short('j').UnNegatableBoolVar(&c.json)
+	conns.Flags().StringVar(&c.archivePath, "archive", "", "Read data from an archive file")
+	conns.Flags().BoolVarP(&c.json, "json", "j", false, "Produce JSON output")
 
-	cpu := report.Command("cpu", "Report on CPU usage").Action(c.withWatcher(c.reportCPU))
-	cpu.Tag("scope:system", "impact:ro")
-	cpu.Arg("limit", "Limit the responses to a certain amount of servers").IntVar(&c.waitFor)
+	cpu := addCommand(report, "cpu", "Report on CPU usage")
+	cpu.RunE = c.withWatcher(c.reportCPU)
+	cmdAddTags(cpu, "scope:system", "impact:ro")
+	addArg(cpu, "limit", "Limit the responses to a certain amount of servers", false, "int")
 	addFilterOpts(cpu)
-	cpu.Flag("archive", "Read data from an archive file").StringVar(&c.archivePath)
-	cpu.Flag("json", "Produce JSON output").Short('j').UnNegatableBoolVar(&c.json)
+	cpu.Flags().StringVar(&c.archivePath, "archive", "", "Read data from an archive file")
+	cpu.Flags().BoolVarP(&c.json, "json", "j", false, "Produce JSON output")
 
-	gateways := report.Command("gateways", "Repost on Gateway (Super Cluster) connections").Alias("super").Alias("gateway").Action(c.withWatcher(c.reportGateway))
-	gateways.Tag("scope:system", "impact:ro")
-	gateways.Arg("limit", "Limit the responses to a certain amount of servers").IntVar(&c.waitFor)
-	gateways.Flag("filter-name", "Limits responses to a certain name").StringVar(&c.gatewayName)
-	gateways.Flag("sort", "Sorts by a specific property (server,cluster)").Default("cluster").EnumVar(&c.sort, "server", "cluster")
+	gateways := addCommand(report, "gateways", "Repost on Gateway (Super Cluster) connections")
+	gateways.Aliases = []string{"super", "gateway"}
+	gateways.RunE = c.withWatcher(c.reportGateway)
+	cmdAddTags(gateways, "scope:system", "impact:ro")
+	addArg(gateways, "limit", "Limit the responses to a certain amount of servers", false, "int")
+	gateways.Flags().StringVar(&c.gatewayName, "filter-name", "", "Limits responses to a certain name")
+	gateways.Flags().Var(newEnumValue(&c.sort, "cluster", "server", "cluster"), "sort", "Sorts by a specific property (server,cluster)")
 	addFilterOpts(gateways)
-	gateways.Flag("archive", "Read data from an archive file").StringVar(&c.archivePath)
+	gateways.Flags().StringVar(&c.archivePath, "archive", "", "Read data from an archive file")
 
-	health := report.Command("health", "Report on Server health").Action(c.withWatcher(c.reportHealth))
-	health.Tag("scope:system", "impact:ro")
-	health.Arg("limit", "Limit the responses to a certain amount of servers").IntVar(&c.waitFor)
-	health.Flag("js-enabled", "Checks that JetStream should be enabled on all servers").Short('J').BoolVar(&c.jsEnabled)
-	health.Flag("server-only", "Restricts the health check to the JetStream server only, do not check streams and consumers").Short('S').BoolVar(&c.jsServerOnly)
-	health.Flag("account", "Check only a specific Account").StringVar(&c.account)
-	health.Flag("stream", "Check only a specific Stream").StringVar(&c.stream)
-	health.Flag("consumer", "Check only a specific Consumer").StringVar(&c.consumer)
+	health := addCommand(report, "health", "Report on Server health")
+	health.RunE = c.withWatcher(c.reportHealth)
+	cmdAddTags(health, "scope:system", "impact:ro")
+	addArg(health, "limit", "Limit the responses to a certain amount of servers", false, "int")
+	health.Flags().BoolVarP(&c.jsEnabled, "js-enabled", "J", false, "Checks that JetStream should be enabled on all servers")
+	health.Flags().BoolVarP(&c.jsServerOnly, "server-only", "S", false, "Restricts the health check to the JetStream server only, do not check streams and consumers")
+	health.Flags().StringVar(&c.account, "account", "", "Check only a specific Account")
+	health.Flags().StringVar(&c.stream, "stream", "", "Check only a specific Stream")
+	health.Flags().StringVar(&c.consumer, "consumer", "", "Check only a specific Consumer")
 	addFilterOpts(health)
-	health.Flag("archive", "Read data from an archive file").StringVar(&c.archivePath)
+	health.Flags().StringVar(&c.archivePath, "archive", "", "Read data from an archive file")
 
-	jsz := report.Command("jetstream", "Report on JetStream activity").Alias("jsz").Alias("js").Action(c.withWatcher(c.reportJetStream))
-	jsz.Tag("scope:system", "impact:ro")
-	jsz.Arg("limit", "Limit the responses to a certain amount of servers").IntVar(&c.waitFor)
-	jsz.Flag("account", "Produce the report for a specific account").StringVar(&c.account)
-	jsz.Flag("sort", "Sort by a specific property (name,cluster,streams,consumers,msgs,mbytes,mem,file,api,err").Default("cluster").EnumVar(&c.sort, "name", "cluster", "streams", "consumers", "msgs", "mbytes", "bytes", "mem", "file", "store", "api", "err")
-	jsz.Flag("compact", "Compact server names").Default("true").BoolVar(&c.compact)
-	jsz.Flag("leaders", "Show details about cluster leaders").Short('l').UnNegatableBoolVar(&c.reportLeaderDistrib)
+	jsz := addCommand(report, "jetstream", "Report on JetStream activity")
+	jsz.Aliases = []string{"jsz", "js"}
+	jsz.RunE = c.withWatcher(c.reportJetStream)
+	cmdAddTags(jsz, "scope:system", "impact:ro")
+	addArg(jsz, "limit", "Limit the responses to a certain amount of servers", false, "int")
+	jsz.Flags().StringVar(&c.account, "account", "", "Produce the report for a specific account")
+	jsz.Flags().Var(newEnumValue(&c.sort, "cluster", "name", "cluster", "streams", "consumers", "msgs", "mbytes", "bytes", "mem", "file", "store", "api", "err"), "sort", "Sort by a specific property (name,cluster,streams,consumers,msgs,mbytes,mem,file,api,err")
+	negatableBoolVar(jsz, &c.compact, "compact", true, "Compact server names")
+	jsz.Flags().BoolVarP(&c.reportLeaderDistrib, "leaders", "l", false, "Show details about cluster leaders")
 	addFilterOpts(jsz)
-	jsz.Flag("archive", "Read data from an archive file").StringVar(&c.archivePath)
+	jsz.Flags().StringVar(&c.archivePath, "archive", "", "Read data from an archive file")
 
-	leafs := report.Command("leafnodes", "Report on Leafnode connections").Alias("leaf").Alias("leafz").Action(c.withWatcher(c.reportLeafs))
-	leafs.Tag("scope:system", "impact:ro")
-	leafs.Arg("limit", "Limit the responses to a certain amount of servers").IntVar(&c.waitFor)
-	leafs.Flag("account", "Produce the report for a specific account").StringVar(&c.account)
-	leafs.Flag("sort", "Sort by a specific property (server,name,account,subs,in-bytes,out-bytes,in-msgs,out-msgs)").EnumVar(&c.sort, "server", "name", "account", "subs", "in-bytes", "out-bytes", "in-msgs", "out-msgs")
+	leafs := addCommand(report, "leafnodes", "Report on Leafnode connections")
+	leafs.Aliases = []string{"leaf", "leafz"}
+	leafs.RunE = c.withWatcher(c.reportLeafs)
+	cmdAddTags(leafs, "scope:system", "impact:ro")
+	addArg(leafs, "limit", "Limit the responses to a certain amount of servers", false, "int")
+	leafs.Flags().StringVar(&c.account, "account", "", "Produce the report for a specific account")
+	leafs.Flags().Var(newEnumValue(&c.sort, "", "server", "name", "account", "subs", "in-bytes", "out-bytes", "in-msgs", "out-msgs"), "sort", "Sort by a specific property (server,name,account,subs,in-bytes,out-bytes,in-msgs,out-msgs)")
 	addFilterOpts(leafs)
-	leafs.Flag("archive", "Read data from an archive file").StringVar(&c.archivePath)
+	leafs.Flags().StringVar(&c.archivePath, "archive", "", "Read data from an archive file")
 
-	mem := report.Command("mem", "Report on Memory usage").Action(c.withWatcher(c.reportMem))
-	mem.Tag("scope:system", "impact:ro")
-	mem.Arg("limit", "Limit the responses to a certain amount of servers").IntVar(&c.waitFor)
+	mem := addCommand(report, "mem", "Report on Memory usage")
+	mem.RunE = c.withWatcher(c.reportMem)
+	cmdAddTags(mem, "scope:system", "impact:ro")
+	addArg(mem, "limit", "Limit the responses to a certain amount of servers", false, "int")
 	addFilterOpts(mem)
-	mem.Flag("archive", "Read data from an archive file").StringVar(&c.archivePath)
-	mem.Flag("json", "Produce JSON output").Short('j').UnNegatableBoolVar(&c.json)
+	mem.Flags().StringVar(&c.archivePath, "archive", "", "Read data from an archive file")
+	mem.Flags().BoolVarP(&c.json, "json", "j", false, "Produce JSON output")
 
-	routes := report.Command("routes", "Report on Route (Cluster) connections").Alias("route").Action(c.withWatcher(c.reportRoute))
-	routes.Tag("scope:system", "impact:ro")
-	routes.Arg("limit", "Limit the responses to a certain amount of servers").IntVar(&c.waitFor)
-	routes.Flag("sort", "Sort by a specific property (server,cluster,name,account,subs,in-bytes,out-bytes)").EnumVar(&c.sort, "server", "cluster", "name", "account", "subs", "in-bytes", "out-bytes")
+	routes := addCommand(report, "routes", "Report on Route (Cluster) connections")
+	routes.Aliases = []string{"route"}
+	routes.RunE = c.withWatcher(c.reportRoute)
+	cmdAddTags(routes, "scope:system", "impact:ro")
+	addArg(routes, "limit", "Limit the responses to a certain amount of servers", false, "int")
+	routes.Flags().Var(newEnumValue(&c.sort, "", "server", "cluster", "name", "account", "subs", "in-bytes", "out-bytes"), "sort", "Sort by a specific property (server,cluster,name,account,subs,in-bytes,out-bytes)")
 	addFilterOpts(routes)
-	routes.Flag("archive", "Read data from an archive file").StringVar(&c.archivePath)
+	routes.Flags().StringVar(&c.archivePath, "archive", "", "Read data from an archive file")
 
-	reportCmd := report.Command("downgrade", "List assets incompatible with the specified API level").Action(c.downgradeCheckAction)
-	reportCmd.Tag("scope:system", "impact:ro")
-	reportCmd.Arg("api", "Target API level to check compatibility against").Required().UintVar(&c.apiLevel)
-	reportCmd.Flag("json", "Output the downgrade report in JSON format").UnNegatableBoolVar(&c.json)
-	reportCmd.Flag("all", "Include consumers whose associated streams are incompatible with the selected API level").UnNegatableBoolVar(&c.all)
-	reportCmd.Flag("archive", "Read data from an archive file").StringVar(&c.archivePath)
+	reportCmd := addCommand(report, "downgrade", "List assets incompatible with the specified API level")
+	reportCmd.RunE = c.downgradeCheckAction
+	cmdAddTags(reportCmd, "scope:system", "impact:ro")
+	addArg(reportCmd, "api", "Target API level to check compatibility against", true, "uint")
+	reportCmd.Flags().BoolVar(&c.json, "json", false, "Output the downgrade report in JSON format")
+	reportCmd.Flags().BoolVar(&c.all, "all", false, "Include consumers whose associated streams are incompatible with the selected API level")
+	reportCmd.Flags().StringVar(&c.archivePath, "archive", "", "Read data from an archive file")
 }
 
-func (c *SrvReportCmd) withWatcher(fn func(*fisk.ParseContext) error) func(*fisk.ParseContext) error {
-	return func(fctx *fisk.ParseContext) error {
+func (c *SrvReportCmd) withWatcher(fn func(*cobra.Command, []string) error) func(*cobra.Command, []string) error {
+	return func(cmd *cobra.Command, args []string) error {
 		if c.archivePath == "" {
 			nc, _, err := prepareHelper("", natsOpts()...)
 			if err != nil {
@@ -196,21 +215,21 @@ func (c *SrvReportCmd) withWatcher(fn func(*fisk.ParseContext) error) func(*fisk
 		}
 
 		if c.watchInterval <= 0 {
-			return fn(fctx)
+			return fn(cmd, args)
 		}
 
 		tick := time.NewTicker(time.Second * time.Duration(c.watchInterval))
 		ctx, cancel := signal.NotifyContext(ctx, syscall.SIGTERM, syscall.SIGINT)
 		defer cancel()
 
-		if err := fn(fctx); err != nil {
+		if err := fn(cmd, args); err != nil {
 			return err
 		}
 
 		for {
 			select {
 			case <-tick.C:
-				if err := fn(fctx); err != nil {
+				if err := fn(cmd, args); err != nil {
 					return err
 				}
 			case <-ctx.Done():
@@ -229,7 +248,23 @@ func (c *SrvReportCmd) dataSource() (serverdata.Source, error) {
 	}, c.waitFor)
 }
 
-func (c *SrvReportCmd) reportLeafs(_ *fisk.ParseContext) error {
+// bindLimitArg binds the optional "limit" positional argument at index idx to c.waitFor.
+func (c *SrvReportCmd) bindLimitArg(args []string, idx int) error {
+	if v := argValue(args, idx); v != "" {
+		i, err := strconv.Atoi(v)
+		if err != nil {
+			return err
+		}
+		c.waitFor = i
+	}
+	return nil
+}
+
+func (c *SrvReportCmd) reportLeafs(_ *cobra.Command, args []string) error {
+	if err := c.bindLimitArg(args, 0); err != nil {
+		return err
+	}
+
 	src, err := c.dataSource()
 	if err != nil {
 		return err
@@ -327,7 +362,11 @@ func (c *SrvReportCmd) parseRtt(rtt string, crit time.Duration) string {
 	return color.RedString(f(d))
 }
 
-func (c *SrvReportCmd) reportHealth(_ *fisk.ParseContext) error {
+func (c *SrvReportCmd) reportHealth(_ *cobra.Command, args []string) error {
+	if err := c.bindLimitArg(args, 0); err != nil {
+		return err
+	}
+
 	src, err := c.dataSource()
 	if err != nil {
 		return err
@@ -419,7 +458,11 @@ func (c *SrvReportCmd) reportHealth(_ *fisk.ParseContext) error {
 	return nil
 }
 
-func (c *SrvReportCmd) reportGateway(_ *fisk.ParseContext) error {
+func (c *SrvReportCmd) reportGateway(_ *cobra.Command, args []string) error {
+	if err := c.bindLimitArg(args, 0); err != nil {
+		return err
+	}
+
 	src, err := c.dataSource()
 	if err != nil {
 		return err
@@ -562,7 +605,11 @@ func (c *SrvReportCmd) reportGateway(_ *fisk.ParseContext) error {
 	return nil
 }
 
-func (c *SrvReportCmd) reportRoute(_ *fisk.ParseContext) error {
+func (c *SrvReportCmd) reportRoute(_ *cobra.Command, args []string) error {
+	if err := c.bindLimitArg(args, 0); err != nil {
+		return err
+	}
+
 	src, err := c.dataSource()
 	if err != nil {
 		return err
@@ -721,11 +768,17 @@ func (c *SrvReportCmd) reportRoute(_ *fisk.ParseContext) error {
 	return nil
 }
 
-func (c *SrvReportCmd) reportMem(_ *fisk.ParseContext) error {
+func (c *SrvReportCmd) reportMem(_ *cobra.Command, args []string) error {
+	if err := c.bindLimitArg(args, 0); err != nil {
+		return err
+	}
 	return c.reportCpuOrMem(true)
 }
 
-func (c *SrvReportCmd) reportCPU(_ *fisk.ParseContext) error {
+func (c *SrvReportCmd) reportCPU(_ *cobra.Command, args []string) error {
+	if err := c.bindLimitArg(args, 0); err != nil {
+		return err
+	}
 	return c.reportCpuOrMem(false)
 }
 
@@ -770,7 +823,11 @@ func (c *SrvReportCmd) reportCpuOrMem(mem bool) error {
 	return iu.BarGraph(os.Stdout, usage, "CPU Usage", width, false)
 }
 
-func (c *SrvReportCmd) reportJetStream(_ *fisk.ParseContext) error {
+func (c *SrvReportCmd) reportJetStream(_ *cobra.Command, args []string) error {
+	if err := c.bindLimitArg(args, 0); err != nil {
+		return err
+	}
+
 	jszOpts := server.JSzOptions{RaftGroups: true}
 	if c.account != "" {
 		jszOpts.Account = c.account
@@ -1066,7 +1123,12 @@ func (c *SrvReportCmd) reportJetStream(_ *fisk.ParseContext) error {
 	return nil
 }
 
-func (c *SrvReportCmd) reportAccount(_ *fisk.ParseContext) error {
+func (c *SrvReportCmd) reportAccount(_ *cobra.Command, args []string) error {
+	c.account = argValue(args, 0)
+	if err := c.bindLimitArg(args, 1); err != nil {
+		return err
+	}
+
 	connz, err := c.getConnz(0, c.nc)
 	if err != nil {
 		return err
@@ -1191,7 +1253,11 @@ type connInfo struct {
 	Info *server.ServerInfo `json:"server"`
 }
 
-func (c *SrvReportCmd) reportConnections(_ *fisk.ParseContext) error {
+func (c *SrvReportCmd) reportConnections(_ *cobra.Command, args []string) error {
+	if err := c.bindLimitArg(args, 0); err != nil {
+		return err
+	}
+
 	connz, err := c.getConnz(0, c.nc)
 	if err != nil {
 		return err
@@ -1388,7 +1454,7 @@ func (c *SrvReportCmd) getConnz(limit int, nc *nats.Conn) (connzList, error) {
 		fallthrough
 	case c.filterExpression != "":
 		program, err = expr.Compile(c.filterExpression, expr.Env(map[string]any{}), expr.AsBool(), expr.AllowUndefinedVariables())
-		fisk.FatalIfError(err, "Invalid expression: %v", err)
+		fatalIfError(err, "Invalid expression: %v", err)
 	}
 
 	removeFilteredConns := func(co *server.ServerAPIConnzResponse) error {
@@ -1409,12 +1475,12 @@ func (c *SrvReportCmd) getConnz(limit int, nc *nats.Conn) (connzList, error) {
 
 			out, err := expr.Run(program, env)
 			if err != nil {
-				fisk.FatalIfError(err, "Invalid expression: %v", err)
+				fatalIfError(err, "Invalid expression: %v", err)
 			}
 
 			should, ok := out.(bool)
 			if !ok {
-				fisk.FatalIfError(err, "expression did not return a boolean")
+				fatalIfError(err, "expression did not return a boolean")
 			}
 
 			if should {
@@ -1597,7 +1663,13 @@ type jsDowngradeConsumerAsset struct {
 	APILevel uint   `json:"api_level"`
 }
 
-func (c *SrvReportCmd) downgradeCheckAction(_ *fisk.ParseContext) error {
+func (c *SrvReportCmd) downgradeCheckAction(_ *cobra.Command, args []string) error {
+	apiLevel, err := strconv.ParseUint(args[0], 10, 64)
+	if err != nil {
+		return err
+	}
+	c.apiLevel = uint(apiLevel)
+
 	if c.archivePath == "" {
 		nc, _, err := prepareHelper("", natsOpts()...)
 		if err != nil {

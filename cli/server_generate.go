@@ -20,10 +20,10 @@ import (
 	"strings"
 
 	"github.com/AlecAivazis/survey/v2"
-	"github.com/choria-io/fisk"
 	au "github.com/nats-io/natscli/internal/auth"
 	"github.com/nats-io/natscli/internal/scaffold"
 	iu "github.com/nats-io/natscli/internal/util"
+	"github.com/spf13/cobra"
 )
 
 type serverGenerateCmd struct {
@@ -31,15 +31,19 @@ type serverGenerateCmd struct {
 	target string
 }
 
-func configureServerGenerateCommand(srv *fisk.CmdClause) {
+func configureServerGenerateCommand(srv commandHost) {
 	c := &serverGenerateCmd{}
 
-	gen := srv.Command("generate", `Generate server configurations`).Alias("gen").Action(c.generateAction)
-	gen.Arg("target", "Write the output to a specific location").Required().StringVar(&c.target)
-	gen.Flag("source", "Fetch the configuration bundle from a file or URL").StringVar(&c.source)
+	gen := addCommand(srv, "generate", `Generate server configurations`)
+	gen.Aliases = []string{"gen"}
+	gen.RunE = c.generateAction
+	addArg(gen, "target", "Write the output to a specific location", true, "string")
+	gen.Flags().StringVar(&c.source, "source", "", "Fetch the configuration bundle from a file or URL")
 }
 
-func (c *serverGenerateCmd) generateAction(_ *fisk.ParseContext) error {
+func (c *serverGenerateCmd) generateAction(_ *cobra.Command, args []string) error {
+	c.target = args[0]
+
 	var b *scaffold.Bundle
 	var err error
 

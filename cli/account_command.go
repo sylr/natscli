@@ -33,8 +33,7 @@ import (
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/natscli/columns"
 	iu "github.com/nats-io/natscli/internal/util"
-
-	"github.com/choria-io/fisk"
+	"github.com/spf13/cobra"
 )
 
 type actCmd struct {
@@ -58,41 +57,52 @@ type actCmd struct {
 
 func configureActCommand(app commandHost) {
 	c := &actCmd{}
-	act := app.Command("account", "Account information and status").Alias("a")
+	act := addCommand(app, "account", "Account information and status")
+	act.Aliases = []string{"a"}
 	addCheat("account", act)
 
-	info := act.Command("info", "Account information").Alias("nfo").Action(c.infoAction)
-	info.Tag("scope:user", "impact:ro")
+	info := addCommand(act, "info", "Account information")
+	info.RunE = c.infoAction
+	cmdAddTags(info, "scope:user", "impact:ro")
 
-	report := act.Command("report", "Report on account metrics").Alias("rep")
-	report.Tag("scope:user", "impact:ro")
+	report := addCommand(act, "report", "Report on account metrics")
+	report.Aliases = []string{"rep"}
+	cmdAddTags(report, "scope:user", "impact:ro")
 
-	conns := report.Command("connections", "Report on connections").Alias("conn").Alias("connz").Alias("conns").Action(c.reportConnectionsAction)
-	conns.Tag("scope:user", "impact:ro")
-	conns.Flag("sort", "Sort by a specific property (in-bytes,out-bytes,in-msgs,out-msgs,uptime,cid,subs)").Default("subs").EnumVar(&c.sort, "in-bytes", "out-bytes", "in-msgs", "out-msgs", "uptime", "cid", "subs")
-	conns.Flag("top", "Limit results to the top results").Default("1000").IntVar(&c.topk)
-	conns.Flag("subject", "Limits responses only to those connections with matching subscription interest").StringVar(&c.subject)
-	conns.Flag("username", "Limits responses only to those connections for a specific authentication username").StringVar(&c.user)
-	conns.Flag("reverse", "Reverse sort connections").Short('R').UnNegatableBoolVar(&c.reverse)
-	conns.Flag("state", "Limits responses only to those connections that are in a specific state (open, closed, all)").Default("open").EnumVar(&c.stateFilter, "open", "closed", "all")
-	conns.Flag("closed-reason", "Filter results based on a closed reason").PlaceHolder("REASON").StringVar(&c.filterReason)
+	conns := addCommand(report, "connections", "Report on connections")
+	conns.Aliases = []string{"conn", "connz", "conns"}
+	conns.RunE = c.reportConnectionsAction
+	cmdAddTags(conns, "scope:user", "impact:ro")
+	conns.Flags().Var(newEnumValue(&c.sort, "subs", "in-bytes", "out-bytes", "in-msgs", "out-msgs", "uptime", "cid", "subs"), "sort", "Sort by a specific property (in-bytes,out-bytes,in-msgs,out-msgs,uptime,cid,subs)")
+	conns.Flags().IntVar(&c.topk, "top", 1000, "Limit results to the top results")
+	conns.Flags().StringVar(&c.subject, "subject", "", "Limits responses only to those connections with matching subscription interest")
+	conns.Flags().StringVar(&c.user, "username", "", "Limits responses only to those connections for a specific authentication username")
+	conns.Flags().BoolVarP(&c.reverse, "reverse", "R", false, "Reverse sort connections")
+	conns.Flags().Var(newEnumValue(&c.stateFilter, "open", "open", "closed", "all"), "state", "Limits responses only to those connections that are in a specific state (open, closed, all)")
+	conns.Flags().StringVar(&c.filterReason, "closed-reason", "", "Filter results based on a closed reason")
+	flagPlaceholder(conns, "closed-reason", "REASON")
 
-	stats := report.Command("statistics", "Report on server statistics").Alias("stats").Alias("statsz").Action(c.reportServerStats)
-	stats.Tag("scope:user", "impact:ro")
+	stats := addCommand(report, "statistics", "Report on server statistics")
+	stats.Aliases = []string{"stats", "statsz"}
+	stats.RunE = c.reportServerStats
+	cmdAddTags(stats, "scope:user", "impact:ro")
 
-	backup := act.Command("backup", "Creates a backup of all  JetStream Streams over the NATS network").Alias("snapshot").Action(c.backupAction)
-	backup.Tag("scope:user", "impact:ro")
-	backup.Arg("target", "Directory to create the backup in").Required().StringVar(&c.backupDirectory)
-	backup.Flag("check", "Checks the Stream for health prior to backup").UnNegatableBoolVar(&c.healthCheck)
-	backup.Flag("consumers", "Enable or disable consumer backups").Default("true").BoolVar(&c.snapShotConsumers)
-	backup.Flag("force", "Perform backup without prompting").Short('f').UnNegatableBoolVar(&c.force)
-	backup.Flag("critical-warnings", "Treat warnings as failures").Short('w').UnNegatableBoolVar(&c.failOnWarn)
+	backup := addCommand(act, "backup", "Creates a backup of all  JetStream Streams over the NATS network")
+	backup.Aliases = []string{"snapshot"}
+	backup.RunE = c.backupAction
+	cmdAddTags(backup, "scope:user", "impact:ro")
+	addArg(backup, "target", "Directory to create the backup in", true, "string")
+	backup.Flags().BoolVar(&c.healthCheck, "check", false, "Checks the Stream for health prior to backup")
+	negatableBoolVar(backup, &c.snapShotConsumers, "consumers", true, "Enable or disable consumer backups")
+	backup.Flags().BoolVarP(&c.force, "force", "f", false, "Perform backup without prompting")
+	backup.Flags().BoolVarP(&c.failOnWarn, "critical-warnings", "w", false, "Treat warnings as failures")
 
-	restore := act.Command("restore", "Restore an account backup over the NATS network").Action(c.restoreAction)
-	restore.Tag("scope:user", "impact:rw")
-	restore.Arg("directory", "The directory holding the account backup to restore").Required().ExistingDirVar(&c.backupDirectory)
-	restore.Flag("cluster", "Place the stream in a specific cluster").StringVar(&c.placementCluster)
-	restore.Flag("tag", "Place the stream on servers that has specific tags (pass multiple times)").StringsVar(&c.placementTags)
+	restore := addCommand(act, "restore", "Restore an account backup over the NATS network")
+	restore.RunE = c.restoreAction
+	cmdAddTags(restore, "scope:user", "impact:rw")
+	addArg(restore, "directory", "The directory holding the account backup to restore", true, "string")
+	restore.Flags().StringVar(&c.placementCluster, "cluster", "", "Place the stream in a specific cluster")
+	restore.Flags().StringArrayVar(&c.placementTags, "tag", nil, "Place the stream on servers that has specific tags (pass multiple times)")
 
 	configureAccountTLSCommand(act)
 }
@@ -101,11 +111,13 @@ func init() {
 	registerCommand("account", 0, configureActCommand)
 }
 
-func (c *actCmd) backupAction(_ *fisk.ParseContext) error {
+func (c *actCmd) backupAction(_ *cobra.Command, args []string) error {
+	c.backupDirectory = args[0]
+
 	var err error
 
 	_, mgr, err := prepareHelper("", natsOpts()...)
-	fisk.FatalIfError(err, "setup failed")
+	fatalIfError(err, "setup failed")
 
 	streams, missing, offline, err := mgr.Streams(nil)
 	if err != nil {
@@ -192,9 +204,11 @@ func (c *actCmd) backupAction(_ *fisk.ParseContext) error {
 	return nil
 }
 
-func (c *actCmd) restoreAction(kp *fisk.ParseContext) error {
+func (c *actCmd) restoreAction(_ *cobra.Command, args []string) error {
+	c.backupDirectory = args[0]
+
 	_, mgr, err := prepareHelper("", natsOpts()...)
-	fisk.FatalIfError(err, "setup failed")
+	fatalIfError(err, "setup failed")
 	streams, err := mgr.StreamNames(nil)
 	if err != nil {
 		return err
@@ -204,28 +218,28 @@ func (c *actCmd) restoreAction(kp *fisk.ParseContext) error {
 		existingStreams[n] = struct{}{}
 	}
 	de, err := os.ReadDir(c.backupDirectory)
-	fisk.FatalIfError(err, "setup failed")
+	fatalIfError(err, "setup failed")
 	for _, d := range de {
 		if !d.IsDir() {
-			fisk.Fatalf("expected a directory %q", d.Name())
+			fatalf("expected a directory %q", d.Name())
 		}
 		if _, ok := existingStreams[d.Name()]; ok {
-			fisk.Fatalf("stream %q exists already", d.Name())
+			fatalf("stream %q exists already", d.Name())
 		}
 		_, err := os.Stat(filepath.Join(c.backupDirectory, d.Name(), "backup.json"))
-		fisk.FatalIfError(err, "expected backup.json")
+		fatalIfError(err, "expected backup.json")
 	}
 	fmt.Printf("Restoring backup of all %d streams in directory %q\n\n", len(de), c.backupDirectory)
 	s := &streamCmd{msgID: -1, showProgress: false, placementCluster: c.placementCluster, placementTags: c.placementTags}
 	for _, d := range de {
 		s.backupDirectory = filepath.Join(c.backupDirectory, d.Name())
-		err := s.restoreAction(kp)
-		fisk.FatalIfError(err, "restore for %s failed", d.Name())
+		err := s.restoreAction(nil, nil)
+		fatalIfError(err, "restore for %s failed", d.Name())
 	}
 	return nil
 }
 
-func (c *actCmd) reportConnectionsAction(pc *fisk.ParseContext) error {
+func (c *actCmd) reportConnectionsAction(_ *cobra.Command, _ []string) error {
 	nc, _, err := prepareHelper("", natsOpts()...)
 	if err != nil {
 		return err
@@ -243,10 +257,10 @@ func (c *actCmd) reportConnectionsAction(pc *fisk.ParseContext) error {
 		nc:                      nc,
 	}
 
-	return cmd.reportConnections(pc)
+	return cmd.reportConnections(nil, nil)
 }
 
-func (c *actCmd) reportServerStats(_ *fisk.ParseContext) error {
+func (c *actCmd) reportServerStats(_ *cobra.Command, _ []string) error {
 	nc, _, err := prepareHelper("", natsOpts()...)
 	if err != nil {
 		return err
@@ -422,9 +436,9 @@ func (c *actCmd) renderTier(cols *columns.Writer, name string, tier api.JetStrea
 	}
 }
 
-func (c *actCmd) infoAction(_ *fisk.ParseContext) error {
+func (c *actCmd) infoAction(_ *cobra.Command, _ []string) error {
 	nc, mgr, err := prepareHelper("", natsOpts()...)
-	fisk.FatalIfError(err, "setup failed")
+	fatalIfError(err, "setup failed")
 
 	id, _ := nc.GetClientID()
 	ip, _ := nc.GetClientIP()

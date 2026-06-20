@@ -29,7 +29,7 @@ import (
 	"github.com/nats-io/nats.go"
 	iu "github.com/nats-io/natscli/internal/util"
 
-	"github.com/choria-io/fisk"
+	"github.com/spf13/cobra"
 )
 
 type srvWatchApiCmd struct {
@@ -69,24 +69,26 @@ func (s *srvWatchApiStats) asset(compact bool) string {
 	return asset
 }
 
-func configureServerWatchApiCommand(watch *fisk.CmdClause) {
+func configureServerWatchApiCommand(watch commandHost) {
 	c := &srvWatchApiCmd{
 		stats: make(map[string]*srvWatchApiStats),
 	}
 
-	api := watch.Command("api", "Watch JetStream API")
+	api := addCommand(watch, "api", "Watch JetStream API")
 
-	requests := api.Command("requests", "Watch JS API Requests").Alias("req").Action(c.reqAction)
-	requests.Tag("scope:system", "impact:ro")
-	requests.Flag("account", "Limit to JetStream account (regex)").RegexpVar(&c.account)
-	requests.Flag("top", "Shows top n requests").Default("10").Short('n').IntVar(&c.top)
-	requests.Flag("rate", "Rate interval to calculate").Default("1m").DurationVar(&c.rateInterval)
-	requests.Flag("record-consumer", "Record consumer names").Default("true").BoolVar(&c.consumers)
-	requests.Flag("compact", "Compact output of long asset and account names").Default("true").BoolVar(&c.compact)
-	requests.Flag("reverse", "Reverse sorting order").Short('R').UnNegatableBoolVar(&c.reverse)
+	requests := addCommand(api, "requests", "Watch JS API Requests")
+	requests.Aliases = []string{"req"}
+	requests.RunE = c.reqAction
+	cmdAddTags(requests, "scope:system", "impact:ro")
+	requests.Flags().Var(newRegexpValue(&c.account), "account", "Limit to JetStream account (regex)")
+	requests.Flags().IntVarP(&c.top, "top", "n", 10, "Shows top n requests")
+	requests.Flags().DurationVar(&c.rateInterval, "rate", time.Minute, "Rate interval to calculate")
+	negatableBoolVar(requests, &c.consumers, "record-consumer", true, "Record consumer names")
+	negatableBoolVar(requests, &c.compact, "compact", true, "Compact output of long asset and account names")
+	requests.Flags().BoolVarP(&c.reverse, "reverse", "R", false, "Reverse sorting order")
 }
 
-func (c *srvWatchApiCmd) reqAction(_ *fisk.ParseContext) error {
+func (c *srvWatchApiCmd) reqAction(_ *cobra.Command, _ []string) error {
 	nc, _, err := prepareHelper("", natsOpts()...)
 	if err != nil {
 		return err

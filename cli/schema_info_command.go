@@ -16,9 +16,9 @@ package cli
 import (
 	"fmt"
 
-	"github.com/choria-io/fisk"
 	"github.com/ghodss/yaml"
 	"github.com/nats-io/jsm.go/api"
+	"github.com/spf13/cobra"
 )
 
 type schemaInfoCmd struct {
@@ -26,14 +26,18 @@ type schemaInfoCmd struct {
 	yaml   bool
 }
 
-func configureSchemaInfoCommand(schema *fisk.CmdClause) {
+func configureSchemaInfoCommand(schema *cobra.Command) {
 	c := &schemaInfoCmd{}
-	info := schema.Command("info", "Display schema contents").Alias("show").Alias("view").Action(c.info)
-	info.Arg("schema", "Schema ID to show").Required().StringVar(&c.schema)
-	info.Flag("yaml", "Produce YAML format output").UnNegatableBoolVar(&c.yaml)
+	info := addCommand(schema, "info", "Display schema contents")
+	info.Aliases = []string{"show", "view"}
+	info.RunE = c.info
+	addArg(info, "schema", "Schema ID to show", true, "string")
+	info.Flags().BoolVar(&c.yaml, "yaml", false, "Produce YAML format output")
 }
 
-func (c *schemaInfoCmd) info(_ *fisk.ParseContext) error {
+func (c *schemaInfoCmd) info(_ *cobra.Command, args []string) error {
+	c.schema = args[0]
+
 	schema, err := api.Schema(c.schema)
 	if err != nil {
 		return fmt.Errorf("could not load schema %q: %s", c.schema, err)

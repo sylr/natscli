@@ -97,7 +97,7 @@ func TestSealUnseal(t *testing.T) {
 	c.outFile = filepath.Join(tDir, "message.enc")
 	c.keyFile = filepath.Join(tDir, "p1_seed")
 
-	err = c.sealAction(nil)
+	err = c.sealAction(nil, []string{c.dataFile, c.keyFile, c.counterpartKey})
 	if err != nil {
 		t.Error("Failed to seal message: " + err.Error())
 		t.FailNow()
@@ -115,7 +115,7 @@ func TestSealUnseal(t *testing.T) {
 	r, w, _ := os.Pipe()
 	os.Stdout = w
 
-	err = c.unsealAction(nil)
+	err = c.unsealAction(nil, []string{c.dataFile, c.keyFile, c.counterpartKey})
 	if err != nil {
 		t.Error("Failed to unseal message: " + err.Error())
 		t.FailNow()

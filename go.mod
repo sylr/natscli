@@ -5,7 +5,6 @@ go 1.25.0
 require (
 	github.com/AlecAivazis/survey/v2 v2.3.7
 	github.com/HdrHistogram/hdrhistogram-go v1.2.0
-	github.com/choria-io/fisk v0.8.4-0.20260530151536-30471af3a46f
 	github.com/choria-io/scaffold v0.0.11
 	github.com/creack/pty v1.1.24
 	github.com/dustin/go-humanize v1.0.1
@@ -27,6 +26,8 @@ require (
 	github.com/nats-io/nuid v1.0.1
 	github.com/prometheus/client_golang v1.23.2
 	github.com/santhosh-tekuri/jsonschema/v5 v5.3.1
+	github.com/spf13/cobra v1.10.2
+	github.com/spf13/pflag v1.0.10
 	github.com/synadia-io/jwt-auth-builder.go v0.0.9
 	github.com/synadia-io/orbit.go/counters v0.1.1
 	github.com/synadia-io/orbit.go/jetstreamext v0.3.1
@@ -48,11 +49,13 @@ require (
 	github.com/antithesishq/antithesis-sdk-go v0.7.0 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
+	github.com/choria-io/fisk v0.8.4-0.20260530151536-30471af3a46f // indirect
 	github.com/clipperhouse/uax29/v2 v2.7.0 // indirect
 	github.com/google/go-tpm v0.9.8 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/gosuri/uilive v0.0.4 // indirect
 	github.com/huandu/xstrings v1.5.0 // indirect
+	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/mattn/go-colorable v0.1.15 // indirect
 	github.com/mattn/go-isatty v0.0.22 // indirect
 	github.com/mattn/go-runewidth v0.0.24 // indirect

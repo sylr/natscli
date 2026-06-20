@@ -20,6 +20,7 @@ import (
 	"os"
 	"os/signal"
 	"sort"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -28,7 +29,7 @@ import (
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/natscli/internal/asciigraph"
 
-	"github.com/choria-io/fisk"
+	"github.com/spf13/cobra"
 )
 
 type SrvPingCmd struct {
@@ -37,17 +38,26 @@ type SrvPingCmd struct {
 	showId bool
 }
 
-func configureServerPingCommand(srv *fisk.CmdClause) {
+func configureServerPingCommand(srv *cobra.Command) {
 	c := &SrvPingCmd{}
 
-	ping := srv.Command("ping", "Ping all servers").Action(c.ping)
-	ping.Tag("scope:system", "impact:ro")
-	ping.Arg("expect", "How many servers to expect").Uint32Var(&c.expect)
-	ping.Flag("graph", "Produce a response distribution graph").UnNegatableBoolVar(&c.graph)
-	ping.Flag("id", "Include the Server ID in the output").UnNegatableBoolVar(&c.showId)
+	ping := addCommand(srv, "ping", "Ping all servers")
+	ping.RunE = c.ping
+	cmdAddTags(ping, "scope:system", "impact:ro")
+	addArg(ping, "expect", "How many servers to expect", false, "uint32")
+	ping.Flags().BoolVar(&c.graph, "graph", false, "Produce a response distribution graph")
+	ping.Flags().BoolVar(&c.showId, "id", false, "Include the Server ID in the output")
 }
 
-func (c *SrvPingCmd) ping(_ *fisk.ParseContext) error {
+func (c *SrvPingCmd) ping(_ *cobra.Command, args []string) error {
+	if v := argValue(args, 0); v != "" {
+		e, err := strconv.ParseUint(v, 10, 32)
+		if err != nil {
+			return fmt.Errorf("invalid expect value %q: %w", v, err)
+		}
+		c.expect = uint32(e)
+	}
+
 	nc, err := newNatsConn("", natsOpts()...)
 	if err != nil {
 		return err

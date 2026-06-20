@@ -33,7 +33,7 @@ import (
 	"github.com/nats-io/nats-server/v2/server"
 	ab "github.com/synadia-io/jwt-auth-builder.go"
 
-	"github.com/choria-io/fisk"
+	"github.com/spf13/cobra"
 )
 
 type authAccountCommand struct {
@@ -118,235 +118,295 @@ type authAccountCommand struct {
 func configureAuthAccountCommand(auth commandHost) {
 	c := &authAccountCommand{}
 
-	acct := auth.Command("account", "Manage NATS Accounts").Alias("a").Alias("acct").Alias("act")
-	addCreateFlags := func(f *fisk.CmdClause, edit bool) {
-		f.Flag("bearer", "Allows bearer tokens").Default("false").IsSetByUser(&c.bearerAllowedIsSet).BoolVar(&c.bearerAllowed)
-		f.Flag("connections", "Maximum allowed connections").Default("-1").IsSetByUser(&c.maxConnsIsSet).Int64Var(&c.maxConns)
-		f.Flag("expiry", "How long this account should be valid for as a duration").PlaceHolder("DURATION").DurationVar(&c.expiry)
-		f.Flag("exports", "Maximum allowed exports").Default("-1").IsSetByUser(&c.maxExportsIsSet).Int64Var(&c.maxExports)
-		f.Flag("imports", "Maximum allowed imports").Default("-1").IsSetByUser(&c.maxImportsIsSet).Int64Var(&c.maxImports)
-		f.Flag("jetstream", "Enables JetStream").Default("false").IsSetByUser(&c.jetStreamIsSet).BoolVar(&c.jetStream)
-		f.Flag("js-consumers", "Sets the maximum Consumers any Stream in the account can have").Default("-1").IsSetByUser(&c.maxConsumersIsSet).Int64Var(&c.maxConsumers)
-		f.Flag("js-disk", "Sets a Disk Storage quota").PlaceHolder("BYTES").StringVar(&c.storeMaxString)
-		f.Flag("js-disk-stream", "Sets the maximum size a Disk Storage stream may be").PlaceHolder("BYTES").Default("-1").StringVar(&c.storeMaxStreamString)
-		f.Flag("js-max-pending", "Default Max Ack Pending for Tier 0 limits").PlaceHolder("MESSAGES").IsSetByUser(&c.maxAckPendingIsSet).Int64Var(&c.maxAckPending)
-		f.Flag("js-memory", "Sets a Memory Storage quota").PlaceHolder("BYTES").StringVar(&c.memMaxString)
-		f.Flag("js-memory-stream", "Sets the maximum size a Memory Storage stream may be").PlaceHolder("BYTES").Default("-1").StringVar(&c.memMaxStreamString)
-		f.Flag("js-stream-size-required", "Requires Streams to have a maximum size declared").IsSetByUser(&c.streamSizeRequiredIsSet).UnNegatableBoolVar(&c.streamSizeRequired)
-		f.Flag("js-streams", "Sets the maximum Streams the account can have").Default("-1").IsSetByUser(&c.maxStreamsIsSet).Int64Var(&c.maxStreams)
-		f.Flag("js-cluster-traffic", "Sets the account used for JetStream cluster traffic").PlaceHolder("ACCOUNT").IsSetByUser(&c.clusterTrafficIsSet).EnumVar(&c.clusterTraffic, "owner", "system")
-		f.Flag("leafnodes", "Maximum allowed Leafnode connections").Default("-1").IsSetByUser(&c.maxLeafNodesIsSet).Int64Var(&c.maxLeafnodes)
-		f.Flag("payload", "Maximum allowed payload").PlaceHolder("BYTES").Default("-1").StringVar(&c.maxPayloadString)
-		f.Flag("subscriptions", "Maximum allowed subscriptions").Default("-1").IsSetByUser(&c.maxSubIsSet).Int64Var(&c.maxSubs)
-		f.Flag("tags", "Tags to assign to this Account").StringsVar(&c.tags)
+	acct := addCommand(auth, "account", "Manage NATS Accounts")
+	acct.Aliases = []string{"a", "acct", "act"}
+	addCreateFlags := func(f *cobra.Command, edit bool) {
+		negatableBoolVar(f, &c.bearerAllowed, "bearer", false, "Allows bearer tokens")
+		f.Flags().Int64Var(&c.maxConns, "connections", -1, "Maximum allowed connections")
+		f.Flags().DurationVar(&c.expiry, "expiry", 0, "How long this account should be valid for as a duration")
+		flagPlaceholder(f, "expiry", "DURATION")
+		f.Flags().Int64Var(&c.maxExports, "exports", -1, "Maximum allowed exports")
+		f.Flags().Int64Var(&c.maxImports, "imports", -1, "Maximum allowed imports")
+		negatableBoolVar(f, &c.jetStream, "jetstream", false, "Enables JetStream")
+		f.Flags().Int64Var(&c.maxConsumers, "js-consumers", -1, "Sets the maximum Consumers any Stream in the account can have")
+		f.Flags().StringVar(&c.storeMaxString, "js-disk", "", "Sets a Disk Storage quota")
+		flagPlaceholder(f, "js-disk", "BYTES")
+		f.Flags().StringVar(&c.storeMaxStreamString, "js-disk-stream", "-1", "Sets the maximum size a Disk Storage stream may be")
+		flagPlaceholder(f, "js-disk-stream", "BYTES")
+		f.Flags().Int64Var(&c.maxAckPending, "js-max-pending", 0, "Default Max Ack Pending for Tier 0 limits")
+		flagPlaceholder(f, "js-max-pending", "MESSAGES")
+		f.Flags().StringVar(&c.memMaxString, "js-memory", "", "Sets a Memory Storage quota")
+		flagPlaceholder(f, "js-memory", "BYTES")
+		f.Flags().StringVar(&c.memMaxStreamString, "js-memory-stream", "-1", "Sets the maximum size a Memory Storage stream may be")
+		flagPlaceholder(f, "js-memory-stream", "BYTES")
+		f.Flags().BoolVar(&c.streamSizeRequired, "js-stream-size-required", false, "Requires Streams to have a maximum size declared")
+		f.Flags().Int64Var(&c.maxStreams, "js-streams", -1, "Sets the maximum Streams the account can have")
+		f.Flags().Var(newEnumValue(&c.clusterTraffic, "", "owner", "system"), "js-cluster-traffic", "Sets the account used for JetStream cluster traffic")
+		flagPlaceholder(f, "js-cluster-traffic", "ACCOUNT")
+		f.Flags().Int64Var(&c.maxLeafnodes, "leafnodes", -1, "Maximum allowed Leafnode connections")
+		f.Flags().StringVar(&c.maxPayloadString, "payload", "-1", "Maximum allowed payload")
+		flagPlaceholder(f, "payload", "BYTES")
+		f.Flags().Int64Var(&c.maxSubs, "subscriptions", -1, "Maximum allowed subscriptions")
+		f.Flags().StringArrayVar(&c.tags, "tags", nil, "Tags to assign to this Account")
 		if edit {
-			f.Flag("no-tags", "Tags to remove from this Account").StringsVar(&c.rmTags)
+			f.Flags().StringArrayVar(&c.rmTags, "no-tags", nil, "Tags to remove from this Account")
 		}
 	}
 
-	add := acct.Command("add", "Adds a new Account").Alias("create").Alias("new").Action(c.addAction)
-	add.Tag("scope:system", "impact:rw")
-	add.Arg("account", "Unique name for this Account").StringVar(&c.accountName)
-	add.Flag("operator", "Operator to add the account to").StringVar(&c.operatorName)
-	add.Flag("key", "The public key to use when signing the user").StringVar(&c.signingKey)
+	add := addCommand(acct, "add", "Adds a new Account")
+	add.Aliases = []string{"create", "new"}
+	add.RunE = c.addAction
+	cmdAddTags(add, "scope:system", "impact:rw")
+	addArg(add, "account", "Unique name for this Account", false, "string")
+	add.Flags().StringVar(&c.operatorName, "operator", "", "Operator to add the account to")
+	add.Flags().StringVar(&c.signingKey, "key", "", "The public key to use when signing the user")
 	addCreateFlags(add, false)
-	add.Flag("defaults", "Accept default values without prompting").UnNegatableBoolVar(&c.defaults)
+	add.Flags().BoolVar(&c.defaults, "defaults", false, "Accept default values without prompting")
 
-	info := acct.Command("info", "Show Account information").Alias("i").Alias("show").Alias("view").Action(c.infoAction)
-	info.Tag("scope:system", "impact:ro")
-	info.Arg("account", "Account to view").StringVar(&c.accountName)
-	info.Flag("operator", "Operator hosting the account").StringVar(&c.operatorName)
-	info.Flag("json", "Produce JSON output").Short('j').UnNegatableBoolVar(&c.json)
+	info := addCommand(acct, "info", "Show Account information")
+	info.Aliases = []string{"i", "show", "view"}
+	info.RunE = c.infoAction
+	cmdAddTags(info, "scope:system", "impact:ro")
+	addArg(info, "account", "Account to view", false, "string")
+	info.Flags().StringVar(&c.operatorName, "operator", "", "Operator hosting the account")
+	info.Flags().BoolVarP(&c.json, "json", "j", false, "Produce JSON output")
 
-	edit := acct.Command("edit", "Edit Account settings").Alias("update").Action(c.editAction)
-	edit.Tag("scope:system", "impact:rw")
-	edit.Arg("account", "Unique name for this Account").StringVar(&c.accountName)
-	edit.Flag("operator", "Operator to add the account to").StringVar(&c.operatorName)
+	edit := addCommand(acct, "edit", "Edit Account settings")
+	edit.Aliases = []string{"update"}
+	edit.RunE = c.editAction
+	cmdAddTags(edit, "scope:system", "impact:rw")
+	addArg(edit, "account", "Unique name for this Account", false, "string")
+	edit.Flags().StringVar(&c.operatorName, "operator", "", "Operator to add the account to")
 	addCreateFlags(edit, false)
 
-	ls := acct.Command("ls", "List Accounts").Action(c.lsAction)
-	ls.Tag("scope:system", "impact:ro")
-	ls.Arg("operator", "Operator to act on").StringVar(&c.operatorName)
-	ls.Flag("names", "Show just the Account names").UnNegatableBoolVar(&c.listNames)
+	ls := addCommand(acct, "ls", "List Accounts")
+	ls.RunE = c.lsAction
+	cmdAddTags(ls, "scope:system", "impact:ro")
+	addArg(ls, "operator", "Operator to act on", false, "string")
+	ls.Flags().BoolVar(&c.listNames, "names", false, "Show just the Account names")
 
 	//rm := acct.Command("rm", "Removes an Account").Action(c.rmAction)
 	//rm.Arg("name", "Account to view").StringVar(&c.accountName)
 	//rm.Flag("operator", "Operator hosting the Account").StringVar(&c.operatorName)
 	//rm.Flag("force", "Removes without prompting").Short('f').UnNegatableBoolVar(&c.force)
 
-	push := acct.Command("push", "Push the Account to the NATS Resolver").Action(c.pushAction)
-	push.Tag("scope:system", "impact:rw")
-	push.Arg("account", "Account to act on").StringVar(&c.accountName)
-	push.Flag("operator", "Operator to act on").StringVar(&c.operatorName)
-	push.Flag("show", "Show the Account JWT before pushing").UnNegatableBoolVar(&c.showJWT)
+	push := addCommand(acct, "push", "Push the Account to the NATS Resolver")
+	push.RunE = c.pushAction
+	cmdAddTags(push, "scope:system", "impact:rw")
+	addArg(push, "account", "Account to act on", false, "string")
+	push.Flags().StringVar(&c.operatorName, "operator", "", "Operator to act on")
+	push.Flags().BoolVar(&c.showJWT, "show", false, "Show the Account JWT before pushing")
 
-	query := acct.Command("query", "Pull the Account from the NATS Resolver and view it").Alias("pull").Action(c.queryAction)
-	query.Tag("scope:system", "impact:ro")
-	query.Arg("account", "Account to act on").Required().StringVar(&c.accountName)
-	query.Arg("output", "Saves the JWT to a file").StringVar(&c.output)
-	query.Flag("operator", "Operator to act on").StringVar(&c.operatorName)
+	query := addCommand(acct, "query", "Pull the Account from the NATS Resolver and view it")
+	query.Aliases = []string{"pull"}
+	query.RunE = c.queryAction
+	cmdAddTags(query, "scope:system", "impact:ro")
+	addArg(query, "account", "Account to act on", true, "string")
+	addArg(query, "output", "Saves the JWT to a file", false, "string")
+	query.Flags().StringVar(&c.operatorName, "operator", "", "Operator to act on")
 
-	imports := acct.Command("imports", "Manage account Imports").Alias("i").Alias("imp").Alias("import")
+	imports := addCommand(acct, "imports", "Manage account Imports")
+	imports.Aliases = []string{"i", "imp", "import"}
 
-	impAdd := imports.Command("add", "Adds an Import").Alias("new").Alias("a").Alias("n").Action(c.importAddAction)
-	impAdd.Tag("scope:system", "impact:rw")
-	impAdd.Arg("name", "A unique name for the import").Required().StringVar(&c.importName)
-	impAdd.Arg("subject", "The Subject to import").Required().StringVar(&c.subject)
-	impAdd.Arg("account", "Account to import into").StringVar(&c.accountName)
-	impAdd.Flag("source", "The account public key to import from").StringVar(&c.importAccount)
-	impAdd.Flag("local", "The local Subject to use for the import").StringVar(&c.localSubject)
-	impAdd.Flag("share", "Shares connection information with the exporter").UnNegatableBoolVar(&c.share)
-	impAdd.Flag("traceable", "Enable tracing messages across Stream imports").UnNegatableBoolVar(&c.allowTrace)
-	impAdd.Flag("service", "Sets the import to be a Service rather than a Stream").UnNegatableBoolVar(&c.isService)
-	impAdd.Flag("operator", "Operator hosting the account").StringVar(&c.operatorName)
+	impAdd := addCommand(imports, "add", "Adds an Import")
+	impAdd.Aliases = []string{"new", "a", "n"}
+	impAdd.RunE = c.importAddAction
+	cmdAddTags(impAdd, "scope:system", "impact:rw")
+	addArg(impAdd, "name", "A unique name for the import", true, "string")
+	addArg(impAdd, "subject", "The Subject to import", true, "string")
+	addArg(impAdd, "account", "Account to import into", false, "string")
+	impAdd.Flags().StringVar(&c.importAccount, "source", "", "The account public key to import from")
+	impAdd.Flags().StringVar(&c.localSubject, "local", "", "The local Subject to use for the import")
+	impAdd.Flags().BoolVar(&c.share, "share", false, "Shares connection information with the exporter")
+	impAdd.Flags().BoolVar(&c.allowTrace, "traceable", false, "Enable tracing messages across Stream imports")
+	impAdd.Flags().BoolVar(&c.isService, "service", false, "Sets the import to be a Service rather than a Stream")
+	impAdd.Flags().StringVar(&c.operatorName, "operator", "", "Operator hosting the account")
 
-	impInfo := imports.Command("info", "Show information for an Import").Alias("i").Alias("show").Alias("view").Action(c.importInfoAction)
-	impInfo.Tag("scope:system", "impact:ro")
-	impInfo.Arg("subject", "Export to view by subject").StringVar(&c.subject)
-	impInfo.Arg("account", "Account to act on").StringVar(&c.accountName)
-	impInfo.Flag("operator", "Operator hosting the account").StringVar(&c.operatorName)
-	impInfo.Flag("json", "Produce JSON output").Short('j').UnNegatableBoolVar(&c.json)
+	impInfo := addCommand(imports, "info", "Show information for an Import")
+	impInfo.Aliases = []string{"i", "show", "view"}
+	impInfo.RunE = c.importInfoAction
+	cmdAddTags(impInfo, "scope:system", "impact:ro")
+	addArg(impInfo, "subject", "Export to view by subject", false, "string")
+	addArg(impInfo, "account", "Account to act on", false, "string")
+	impInfo.Flags().StringVar(&c.operatorName, "operator", "", "Operator hosting the account")
+	impInfo.Flags().BoolVarP(&c.json, "json", "j", false, "Produce JSON output")
 
-	impEdit := imports.Command("edit", "Edits an Import").Alias("update").Action(c.importEditAction)
-	impEdit.Tag("scope:system", "impact:rw")
-	impEdit.Arg("subject", "The Local import Subject to edit").Required().StringVar(&c.subject)
-	impEdit.Arg("account", "Account to act on").StringVar(&c.accountName)
-	impEdit.Flag("local", "The local Subject to use for the import").StringVar(&c.localSubject)
-	impEdit.Flag("share", "Shares connection information with the exporter").IsSetByUser(&c.shareIsSet).UnNegatableBoolVar(&c.share)
-	impEdit.Flag("traceable", "Enable tracing messages across Stream imports").IsSetByUser(&c.allowTraceIsSet).UnNegatableBoolVar(&c.allowTrace)
-	impEdit.Flag("operator", "Operator hosting the account").StringVar(&c.operatorName)
+	impEdit := addCommand(imports, "edit", "Edits an Import")
+	impEdit.Aliases = []string{"update"}
+	impEdit.RunE = c.importEditAction
+	cmdAddTags(impEdit, "scope:system", "impact:rw")
+	addArg(impEdit, "subject", "The Local import Subject to edit", true, "string")
+	addArg(impEdit, "account", "Account to act on", false, "string")
+	impEdit.Flags().StringVar(&c.localSubject, "local", "", "The local Subject to use for the import")
+	impEdit.Flags().BoolVar(&c.share, "share", false, "Shares connection information with the exporter")
+	impEdit.Flags().BoolVar(&c.allowTrace, "traceable", false, "Enable tracing messages across Stream imports")
+	impEdit.Flags().StringVar(&c.operatorName, "operator", "", "Operator hosting the account")
 
-	impLs := imports.Command("ls", "List Imports").Alias("list").Action(c.importLsAction)
-	impLs.Tag("scope:system", "impact:ro")
-	impLs.Arg("account", "Account to act on").StringVar(&c.accountName)
-	impLs.Arg("operator", "Operator to act on").StringVar(&c.operatorName)
+	impLs := addCommand(imports, "ls", "List Imports")
+	impLs.Aliases = []string{"list"}
+	impLs.RunE = c.importLsAction
+	cmdAddTags(impLs, "scope:system", "impact:ro")
+	addArg(impLs, "account", "Account to act on", false, "string")
+	addArg(impLs, "operator", "Operator to act on", false, "string")
 
-	impRm := imports.Command("rm", "Removes an Import").Action(c.importRmAction)
-	impRm.Tag("scope:system", "impact:rw")
-	impRm.Arg("subject", "Import to remove by local subject").Required().StringVar(&c.subject)
-	impRm.Arg("account", "Account to act on").StringVar(&c.accountName)
-	impRm.Flag("operator", "Operator hosting the account").StringVar(&c.operatorName)
-	impRm.Flag("force", "Removes without prompting").Short('f').UnNegatableBoolVar(&c.force)
+	impRm := addCommand(imports, "rm", "Removes an Import")
+	impRm.RunE = c.importRmAction
+	cmdAddTags(impRm, "scope:system", "impact:rw")
+	addArg(impRm, "subject", "Import to remove by local subject", true, "string")
+	addArg(impRm, "account", "Account to act on", false, "string")
+	impRm.Flags().StringVar(&c.operatorName, "operator", "", "Operator hosting the account")
+	impRm.Flags().BoolVarP(&c.force, "force", "f", false, "Removes without prompting")
 
-	impKv := imports.Command("kv", "Imports a KV bucket").Hidden().Action(c.importKvAction)
-	impKv.Tag("scope:system", "impact:rw")
-	impKv.Arg("bucket", "The bucket to export").Required().StringVar(&c.bucketName)
-	impKv.Arg("prefix", "The prefix to mount the bucket on").Required().StringVar(&c.prefix)
-	impKv.Arg("source", "The account public key to import from").Required().StringVar(&c.importAccount)
+	impKv := addCommand(imports, "kv", "Imports a KV bucket")
+	impKv.Hidden = true
+	impKv.RunE = c.importKvAction
+	cmdAddTags(impKv, "scope:system", "impact:rw")
+	addArg(impKv, "bucket", "The bucket to export", true, "string")
+	addArg(impKv, "prefix", "The prefix to mount the bucket on", true, "string")
+	addArg(impKv, "source", "The account public key to import from", true, "string")
 
-	exports := acct.Command("exports", "Manage account Exports").Alias("e").Alias("exp").Alias("export")
+	exports := addCommand(acct, "exports", "Manage account Exports")
+	exports.Aliases = []string{"e", "exp", "export"}
 
-	expAdd := exports.Command("add", "Adds an Export").Alias("new").Alias("a").Alias("n").Action(c.exportAddAction)
-	expAdd.Tag("scope:system", "impact:rw")
-	expAdd.Arg("name", "A unique name for the Export").Required().StringVar(&c.exportName)
-	expAdd.Arg("subject", "The Subject to export").Required().StringVar(&c.subject)
-	expAdd.Arg("account", "Account to act on").StringVar(&c.accountName)
-	expAdd.Flag("operator", "Operator hosting the account").StringVar(&c.operatorName)
-	expAdd.Flag("description", "Friendly description").StringVar(&c.description)
-	expAdd.Flag("url", "Sets a URL for further information").URLVar(&c.url)
-	expAdd.Flag("token-position", "The position to use for the Account name").UintVar(&c.tokenPosition)
-	expAdd.Flag("advertise", "Advertise the Export").UnNegatableBoolVar(&c.advertise)
-	expAdd.Flag("service", "Sets the Export to be a Service rather than a Stream").UnNegatableBoolVar(&c.isService)
+	expAdd := addCommand(exports, "add", "Adds an Export")
+	expAdd.Aliases = []string{"new", "a", "n"}
+	expAdd.RunE = c.exportAddAction
+	cmdAddTags(expAdd, "scope:system", "impact:rw")
+	addArg(expAdd, "name", "A unique name for the Export", true, "string")
+	addArg(expAdd, "subject", "The Subject to export", true, "string")
+	addArg(expAdd, "account", "Account to act on", false, "string")
+	expAdd.Flags().StringVar(&c.operatorName, "operator", "", "Operator hosting the account")
+	expAdd.Flags().StringVar(&c.description, "description", "", "Friendly description")
+	expAdd.Flags().Var(newURLValue(&c.url), "url", "Sets a URL for further information")
+	expAdd.Flags().UintVar(&c.tokenPosition, "token-position", 0, "The position to use for the Account name")
+	expAdd.Flags().BoolVar(&c.advertise, "advertise", false, "Advertise the Export")
+	expAdd.Flags().BoolVar(&c.isService, "service", false, "Sets the Export to be a Service rather than a Stream")
 
-	expInfo := exports.Command("info", "Show information for an Export").Alias("i").Alias("show").Alias("view").Action(c.exportInfoAction)
-	expInfo.Tag("scope:system", "impact:ro")
-	expInfo.Arg("subject", "Export to view by subject").StringVar(&c.subject)
-	expInfo.Arg("account", "Account to act on").StringVar(&c.accountName)
-	expInfo.Flag("operator", "Operator hosting the account").StringVar(&c.operatorName)
-	expInfo.Flag("json", "Produce JSON output").Short('j').UnNegatableBoolVar(&c.json)
+	expInfo := addCommand(exports, "info", "Show information for an Export")
+	expInfo.Aliases = []string{"i", "show", "view"}
+	expInfo.RunE = c.exportInfoAction
+	cmdAddTags(expInfo, "scope:system", "impact:ro")
+	addArg(expInfo, "subject", "Export to view by subject", false, "string")
+	addArg(expInfo, "account", "Account to act on", false, "string")
+	expInfo.Flags().StringVar(&c.operatorName, "operator", "", "Operator hosting the account")
+	expInfo.Flags().BoolVarP(&c.json, "json", "j", false, "Produce JSON output")
 
-	expEdit := exports.Command("edit", "Edits an Export").Alias("update").Action(c.exportEditAction)
-	expEdit.Tag("scope:system", "impact:rw")
-	expEdit.Arg("subject", "The Export Subject to edit").Required().StringVar(&c.subject)
-	expEdit.Arg("account", "Account to act on").StringVar(&c.accountName)
-	expEdit.Flag("operator", "Operator hosting the account").StringVar(&c.operatorName)
-	expEdit.Flag("description", "Friendly description").IsSetByUser(&c.descriptionIsSet).StringVar(&c.description)
-	expEdit.Flag("url", "Sets a URL for further information").URLVar(&c.url)
-	expEdit.Flag("token-position", "The position to use for the Account name").UintVar(&c.tokenPosition)
-	expEdit.Flag("advertise", "Advertise the Export").IsSetByUser(&c.advertiseIsSet).BoolVar(&c.advertise)
+	expEdit := addCommand(exports, "edit", "Edits an Export")
+	expEdit.Aliases = []string{"update"}
+	expEdit.RunE = c.exportEditAction
+	cmdAddTags(expEdit, "scope:system", "impact:rw")
+	addArg(expEdit, "subject", "The Export Subject to edit", true, "string")
+	addArg(expEdit, "account", "Account to act on", false, "string")
+	expEdit.Flags().StringVar(&c.operatorName, "operator", "", "Operator hosting the account")
+	expEdit.Flags().StringVar(&c.description, "description", "", "Friendly description")
+	expEdit.Flags().Var(newURLValue(&c.url), "url", "Sets a URL for further information")
+	expEdit.Flags().UintVar(&c.tokenPosition, "token-position", 0, "The position to use for the Account name")
+	negatableBoolVar(expEdit, &c.advertise, "advertise", false, "Advertise the Export")
 
-	expLs := exports.Command("ls", "List Exports").Alias("list").Action(c.exportLsAction)
-	expLs.Tag("scope:system", "impact:ro")
-	expLs.Arg("account", "Account to act on").StringVar(&c.accountName)
-	expLs.Flag("operator", "Operator to act on").StringVar(&c.operatorName)
+	expLs := addCommand(exports, "ls", "List Exports")
+	expLs.Aliases = []string{"list"}
+	expLs.RunE = c.exportLsAction
+	cmdAddTags(expLs, "scope:system", "impact:ro")
+	addArg(expLs, "account", "Account to act on", false, "string")
+	expLs.Flags().StringVar(&c.operatorName, "operator", "", "Operator to act on")
 
-	expRm := exports.Command("rm", "Removes an Export").Action(c.exportRmAction)
-	expRm.Tag("scope:system", "impact:rw")
-	expRm.Arg("subject", "Export to remove by subject").Required().StringVar(&c.subject)
-	expRm.Arg("account", "Account to act on").StringVar(&c.accountName)
-	expRm.Flag("operator", "Operator hosting the account").StringVar(&c.operatorName)
-	expRm.Flag("force", "Removes without prompting").Short('f').UnNegatableBoolVar(&c.force)
+	expRm := addCommand(exports, "rm", "Removes an Export")
+	expRm.RunE = c.exportRmAction
+	cmdAddTags(expRm, "scope:system", "impact:rw")
+	addArg(expRm, "subject", "Export to remove by subject", true, "string")
+	addArg(expRm, "account", "Account to act on", false, "string")
+	expRm.Flags().StringVar(&c.operatorName, "operator", "", "Operator hosting the account")
+	expRm.Flags().BoolVarP(&c.force, "force", "f", false, "Removes without prompting")
 
-	expKv := exports.Command("kv", "Exports a KV bucket").Hidden().Action(c.exportKvAction)
-	expKv.Tag("scope:system", "impact:rw")
-	expKv.Arg("bucket", "The bucket to export").Required().StringVar(&c.bucketName)
+	expKv := addCommand(exports, "kv", "Exports a KV bucket")
+	expKv.Hidden = true
+	expKv.RunE = c.exportKvAction
+	cmdAddTags(expKv, "scope:system", "impact:rw")
+	addArg(expKv, "bucket", "The bucket to export", true, "string")
 
-	sk := acct.Command("keys", "Manage Scoped Signing Keys").Alias("sk").Alias("s")
+	sk := addCommand(acct, "keys", "Manage Scoped Signing Keys")
+	sk.Aliases = []string{"sk", "s"}
 
-	skadd := sk.Command("add", "Adds a signing key").Alias("new").Alias("a").Alias("n").Action(c.skAddAction)
-	skadd.Tag("scope:system", "impact:rw")
-	skadd.Arg("account", "Account to act on").StringVar(&c.accountName)
-	skadd.Arg("role", "The role to add a key for").StringVar(&c.skRole)
-	skadd.Flag("operator", "Operator to act on").StringVar(&c.operatorName)
-	skadd.Flag("description", "Description for the signing key").StringVar(&c.description)
-	skadd.Flag("subscriptions", "Maximum allowed subscriptions").Default("-1").Int64Var(&c.maxSubs)
-	skadd.Flag("payload", "Maximum allowed payload").PlaceHolder("BYTES").StringVar(&c.maxPayloadString)
-	skadd.Flag("bearer", "Allows bearer tokens").Default("false").BoolVar(&c.bearerAllowed)
-	skadd.Flag("locale", "Locale for the client").StringVar(&c.locale)
-	skadd.Flag("connection", "Set the allowed connections (nats, ws, wsleaf, mqtt)").EnumsVar(&c.connTypes, "nats", "ws", "leaf", "wsleaf", "mqtt")
-	skadd.Flag("pub-allow", "Sets subjects where publishing is allowed").StringsVar(&c.pubAllow)
-	skadd.Flag("pub-deny", "Sets subjects where publishing is allowed").StringsVar(&c.pubDeny)
-	skadd.Flag("sub-allow", "Sets subjects where subscribing is allowed").StringsVar(&c.subAllow)
-	skadd.Flag("sub-deny", "Sets subjects where subscribing is allowed").StringsVar(&c.subDeny)
+	skadd := addCommand(sk, "add", "Adds a signing key")
+	skadd.Aliases = []string{"new", "a", "n"}
+	skadd.RunE = c.skAddAction
+	cmdAddTags(skadd, "scope:system", "impact:rw")
+	addArg(skadd, "account", "Account to act on", false, "string")
+	addArg(skadd, "role", "The role to add a key for", false, "string")
+	skadd.Flags().StringVar(&c.operatorName, "operator", "", "Operator to act on")
+	skadd.Flags().StringVar(&c.description, "description", "", "Description for the signing key")
+	skadd.Flags().Int64Var(&c.maxSubs, "subscriptions", -1, "Maximum allowed subscriptions")
+	skadd.Flags().StringVar(&c.maxPayloadString, "payload", "", "Maximum allowed payload")
+	flagPlaceholder(skadd, "payload", "BYTES")
+	negatableBoolVar(skadd, &c.bearerAllowed, "bearer", false, "Allows bearer tokens")
+	skadd.Flags().StringVar(&c.locale, "locale", "", "Locale for the client")
+	skadd.Flags().Var(newEnumsValue(&c.connTypes, "nats", "ws", "leaf", "wsleaf", "mqtt"), "connection", "Set the allowed connections (nats, ws, wsleaf, mqtt)")
+	skadd.Flags().StringArrayVar(&c.pubAllow, "pub-allow", nil, "Sets subjects where publishing is allowed")
+	skadd.Flags().StringArrayVar(&c.pubDeny, "pub-deny", nil, "Sets subjects where publishing is allowed")
+	skadd.Flags().StringArrayVar(&c.subAllow, "sub-allow", nil, "Sets subjects where subscribing is allowed")
+	skadd.Flags().StringArrayVar(&c.subDeny, "sub-deny", nil, "Sets subjects where subscribing is allowed")
 
-	skInfo := sk.Command("info", "Show information for a Scoped Signing Key").Alias("i").Alias("show").Alias("view").Action(c.skInfoAction)
-	skInfo.Tag("scope:system", "impact:ro")
-	skInfo.Arg("account", "Account to view").StringVar(&c.accountName)
-	skInfo.Arg("key", "The role or key to view").StringVar(&c.skRole)
-	skInfo.Flag("operator", "Operator to act on").StringVar(&c.operatorName)
-	skInfo.Flag("json", "Produce JSON output").Short('j').UnNegatableBoolVar(&c.json)
+	skInfo := addCommand(sk, "info", "Show information for a Scoped Signing Key")
+	skInfo.Aliases = []string{"i", "show", "view"}
+	skInfo.RunE = c.skInfoAction
+	cmdAddTags(skInfo, "scope:system", "impact:ro")
+	addArg(skInfo, "account", "Account to view", false, "string")
+	addArg(skInfo, "key", "The role or key to view", false, "string")
+	skInfo.Flags().StringVar(&c.operatorName, "operator", "", "Operator to act on")
+	skInfo.Flags().BoolVarP(&c.json, "json", "j", false, "Produce JSON output")
 
-	skls := sk.Command("ls", "List Scoped Signing Keys").Alias("list").Action(c.skListAction)
-	skls.Tag("scope:system", "impact:ro")
-	skls.Arg("account", "Account to act on").StringVar(&c.accountName)
-	skls.Flag("operator", "Operator to act on").StringVar(&c.operatorName)
+	skls := addCommand(sk, "ls", "List Scoped Signing Keys")
+	skls.Aliases = []string{"list"}
+	skls.RunE = c.skListAction
+	cmdAddTags(skls, "scope:system", "impact:ro")
+	addArg(skls, "account", "Account to act on", false, "string")
+	skls.Flags().StringVar(&c.operatorName, "operator", "", "Operator to act on")
 
-	skrm := sk.Command("rm", "Remove a scoped signing key").Action(c.skRmAction)
-	skrm.Tag("scope:system", "impact:rw")
-	skrm.Arg("account", "Account to act on").StringVar(&c.accountName)
-	skrm.Flag("key", "The key to remove").StringVar(&c.skRole)
-	skrm.Flag("operator", "Operator to act on").StringVar(&c.operatorName)
-	skrm.Flag("force", "Removes without prompting").Short('f').UnNegatableBoolVar(&c.force)
+	skrm := addCommand(sk, "rm", "Remove a scoped signing key")
+	skrm.RunE = c.skRmAction
+	cmdAddTags(skrm, "scope:system", "impact:rw")
+	addArg(skrm, "account", "Account to act on", false, "string")
+	skrm.Flags().StringVar(&c.skRole, "key", "", "The key to remove")
+	skrm.Flags().StringVar(&c.operatorName, "operator", "", "Operator to act on")
+	skrm.Flags().BoolVarP(&c.force, "force", "f", false, "Removes without prompting")
 
-	mappings := acct.Command("mappings", "Manage account level subject mapping and partitioning").Alias("m").Alias("mapping").Alias("map")
+	mappings := addCommand(acct, "mappings", "Manage account level subject mapping and partitioning")
+	mappings.Aliases = []string{"m", "mapping", "map"}
 
-	mappingsaAdd := mappings.Command("add", "Add a new mapping").Alias("new").Alias("a").Action(c.mappingAddAction)
-	mappingsaAdd.Tag("scope:system", "impact:rw")
-	mappingsaAdd.Arg("account", "Account to create the mappings on").StringVar(&c.accountName)
-	mappingsaAdd.Arg("source", "The source subject of the mapping").StringVar(&c.mapSource)
-	mappingsaAdd.Arg("target", "The target subject of the mapping").StringVar(&c.mapTarget)
-	mappingsaAdd.Arg("weight", "The weight (%) of the mapping").Default("100").UintVar(&c.mapWeight)
-	mappingsaAdd.Arg("cluster", "Limit the mappings to a specific cluster").StringVar(&c.mapCluster)
-	mappingsaAdd.Flag("operator", "Operator to act on").StringVar(&c.operatorName)
-	mappingsaAdd.Flag("config", "json or yaml file to read configuration from").ExistingFileVar(&c.inputFile)
+	mappingsaAdd := addCommand(mappings, "add", "Add a new mapping")
+	mappingsaAdd.Aliases = []string{"new", "a"}
+	mappingsaAdd.RunE = c.mappingAddAction
+	cmdAddTags(mappingsaAdd, "scope:system", "impact:rw")
+	addArg(mappingsaAdd, "account", "Account to create the mappings on", false, "string")
+	addArg(mappingsaAdd, "source", "The source subject of the mapping", false, "string")
+	addArg(mappingsaAdd, "target", "The target subject of the mapping", false, "string")
+	addArgWithDefault(mappingsaAdd, "weight", "The weight (%) of the mapping", "100", "uint")
+	addArg(mappingsaAdd, "cluster", "Limit the mappings to a specific cluster", false, "string")
+	mappingsaAdd.Flags().StringVar(&c.operatorName, "operator", "", "Operator to act on")
+	mappingsaAdd.Flags().Var(newExistingFileValue(&c.inputFile), "config", "json or yaml file to read configuration from")
 
-	mappingsls := mappings.Command("ls", "List mappings").Alias("list").Action(c.mappingListAction)
-	mappingsls.Tag("scope:system", "impact:ro")
-	mappingsls.Arg("account", "Account to list the mappings from").StringVar(&c.accountName)
-	mappingsls.Flag("operator", "Operator to act on").StringVar(&c.operatorName)
+	mappingsls := addCommand(mappings, "ls", "List mappings")
+	mappingsls.Aliases = []string{"list"}
+	mappingsls.RunE = c.mappingListAction
+	cmdAddTags(mappingsls, "scope:system", "impact:ro")
+	addArg(mappingsls, "account", "Account to list the mappings from", false, "string")
+	mappingsls.Flags().StringVar(&c.operatorName, "operator", "", "Operator to act on")
 
-	mappingsrm := mappings.Command("rm", "Remove a mapping").Action(c.mappingRmAction)
-	mappingsrm.Tag("scope:system", "impact:rw")
-	mappingsrm.Arg("account", "Account to remove the mappings from").StringVar(&c.accountName)
-	mappingsrm.Arg("source", "The source subject of the mapping").StringVar(&c.mapSource)
-	mappingsrm.Flag("operator", "Operator to act on").StringVar(&c.operatorName)
+	mappingsrm := addCommand(mappings, "rm", "Remove a mapping")
+	mappingsrm.RunE = c.mappingRmAction
+	cmdAddTags(mappingsrm, "scope:system", "impact:rw")
+	addArg(mappingsrm, "account", "Account to remove the mappings from", false, "string")
+	addArg(mappingsrm, "source", "The source subject of the mapping", false, "string")
+	mappingsrm.Flags().StringVar(&c.operatorName, "operator", "", "Operator to act on")
 
-	mappingsinfo := mappings.Command("info", "Show information about a mapping").Alias("i").Alias("show").Alias("view").Action(c.mappingInfoAction)
-	mappingsinfo.Tag("scope:system", "impact:ro")
-	mappingsinfo.Arg("account", "Account to inspect the mappings from").StringVar(&c.accountName)
-	mappingsinfo.Arg("source", "The source subject of the mapping").StringVar(&c.mapSource)
-	mappingsinfo.Flag("operator", "Operator to act on").StringVar(&c.operatorName)
-	mappingsinfo.Flag("json", "Produce JSON output").Short('j').UnNegatableBoolVar(&c.json)
+	mappingsinfo := addCommand(mappings, "info", "Show information about a mapping")
+	mappingsinfo.Aliases = []string{"i", "show", "view"}
+	mappingsinfo.RunE = c.mappingInfoAction
+	cmdAddTags(mappingsinfo, "scope:system", "impact:ro")
+	addArg(mappingsinfo, "account", "Account to inspect the mappings from", false, "string")
+	addArg(mappingsinfo, "source", "The source subject of the mapping", false, "string")
+	mappingsinfo.Flags().StringVar(&c.operatorName, "operator", "", "Operator to act on")
+	mappingsinfo.Flags().BoolVarP(&c.json, "json", "j", false, "Produce JSON output")
 }
 
 func (c *authAccountCommand) selectAccount(pick bool) (*ab.AuthImpl, ab.Operator, ab.Account, error) {
@@ -372,7 +432,10 @@ func (c *authAccountCommand) selectOperator(pick bool) (*ab.AuthImpl, ab.Operato
 	return auth, oper, err
 }
 
-func (c *authAccountCommand) queryAction(_ *fisk.ParseContext) error {
+func (c *authAccountCommand) queryAction(_ *cobra.Command, args []string) error {
+	c.accountName = args[0]
+	c.output = argValue(args, 1)
+
 	nc, _, err := prepareHelper("", natsOpts()...)
 	if err != nil {
 		return err
@@ -415,7 +478,9 @@ func (c *authAccountCommand) queryAction(_ *fisk.ParseContext) error {
 	return c.fShowAccount(os.Stdout, nil, acct)
 }
 
-func (c *authAccountCommand) pushAction(_ *fisk.ParseContext) error {
+func (c *authAccountCommand) pushAction(_ *cobra.Command, args []string) error {
+	c.accountName = argValue(args, 0)
+
 	_, _, acct, err := c.selectAccount(true)
 	if err != nil {
 		return err
@@ -494,7 +559,9 @@ func (c *authAccountCommand) pushAction(_ *fisk.ParseContext) error {
 	return nil
 }
 
-func (c *authAccountCommand) skRmAction(_ *fisk.ParseContext) error {
+func (c *authAccountCommand) skRmAction(_ *cobra.Command, args []string) error {
+	c.accountName = argValue(args, 0)
+
 	auth, _, acct, err := c.selectAccount(true)
 	if err != nil {
 		return err
@@ -534,7 +601,10 @@ func (c *authAccountCommand) skRmAction(_ *fisk.ParseContext) error {
 	return nil
 }
 
-func (c *authAccountCommand) skInfoAction(_ *fisk.ParseContext) error {
+func (c *authAccountCommand) skInfoAction(_ *cobra.Command, args []string) error {
+	c.accountName = argValue(args, 0)
+	c.skRole = argValue(args, 1)
+
 	_, _, acct, err := c.selectAccount(true)
 	if err != nil {
 		return err
@@ -554,7 +624,10 @@ func (c *authAccountCommand) skInfoAction(_ *fisk.ParseContext) error {
 	return nil
 }
 
-func (c *authAccountCommand) skAddAction(_ *fisk.ParseContext) error {
+func (c *authAccountCommand) skAddAction(_ *cobra.Command, args []string) error {
+	c.accountName = argValue(args, 0)
+	c.skRole = argValue(args, 1)
+
 	auth, _, acct, err := c.selectAccount(true)
 	if err != nil {
 		return err
@@ -668,7 +741,9 @@ func (c *authAccountCommand) connectionTypes() []string {
 	return types
 }
 
-func (c *authAccountCommand) skListAction(_ *fisk.ParseContext) error {
+func (c *authAccountCommand) skListAction(_ *cobra.Command, args []string) error {
+	c.accountName = argValue(args, 0)
+
 	_, _, acct, err := c.selectAccount(true)
 	if err != nil {
 		return err
@@ -698,7 +773,21 @@ func (c *authAccountCommand) skListAction(_ *fisk.ParseContext) error {
 	return nil
 }
 
-func (c *authAccountCommand) editAction(_ *fisk.ParseContext) error {
+func (c *authAccountCommand) editAction(cmd *cobra.Command, args []string) error {
+	c.accountName = argValue(args, 0)
+	c.bearerAllowedIsSet = cmd.Flags().Changed("bearer")
+	c.maxConnsIsSet = cmd.Flags().Changed("connections")
+	c.maxExportsIsSet = cmd.Flags().Changed("exports")
+	c.maxImportsIsSet = cmd.Flags().Changed("imports")
+	c.jetStreamIsSet = cmd.Flags().Changed("jetstream")
+	c.maxConsumersIsSet = cmd.Flags().Changed("js-consumers")
+	c.maxAckPendingIsSet = cmd.Flags().Changed("js-max-pending")
+	c.streamSizeRequiredIsSet = cmd.Flags().Changed("js-stream-size-required")
+	c.maxStreamsIsSet = cmd.Flags().Changed("js-streams")
+	c.clusterTrafficIsSet = cmd.Flags().Changed("js-cluster-traffic")
+	c.maxLeafNodesIsSet = cmd.Flags().Changed("leafnodes")
+	c.maxSubIsSet = cmd.Flags().Changed("subscriptions")
+
 	auth, operator, acct, err := c.selectAccount(true)
 	if err != nil {
 		return err
@@ -784,7 +873,7 @@ func (c *authAccountCommand) editAction(_ *fisk.ParseContext) error {
 	return c.fShowAccount(os.Stdout, operator, acct)
 }
 
-//func (c *authAccountCommand) rmAction(_ *fisk.ParseContext) error {
+//func (c *authAccountCommand) rmAction(_ *cobra.Command, _ []string) error {
 //	fmt.Println("WARNING: At present deleting is not supported by the nsc store")
 //	fmt.Println()
 //
@@ -818,7 +907,9 @@ func (c *authAccountCommand) editAction(_ *fisk.ParseContext) error {
 //	return nil
 //}
 
-func (c *authAccountCommand) lsAction(_ *fisk.ParseContext) error {
+func (c *authAccountCommand) lsAction(_ *cobra.Command, args []string) error {
+	c.operatorName = argValue(args, 0)
+
 	_, operator, err := c.selectOperator(true)
 	if err != nil {
 		return err
@@ -870,7 +961,9 @@ func (c *authAccountCommand) lsAction(_ *fisk.ParseContext) error {
 	return nil
 }
 
-func (c *authAccountCommand) infoAction(_ *fisk.ParseContext) error {
+func (c *authAccountCommand) infoAction(_ *cobra.Command, args []string) error {
+	c.accountName = argValue(args, 0)
+
 	_, operator, account, err := c.selectAccount(true)
 	if err != nil {
 		return err
@@ -979,7 +1072,21 @@ func (c *authAccountCommand) parseStringOptions() error {
 	return nil
 }
 
-func (c *authAccountCommand) addAction(_ *fisk.ParseContext) error {
+func (c *authAccountCommand) addAction(cmd *cobra.Command, args []string) error {
+	c.accountName = argValue(args, 0)
+	c.bearerAllowedIsSet = cmd.Flags().Changed("bearer")
+	c.maxConnsIsSet = cmd.Flags().Changed("connections")
+	c.maxExportsIsSet = cmd.Flags().Changed("exports")
+	c.maxImportsIsSet = cmd.Flags().Changed("imports")
+	c.jetStreamIsSet = cmd.Flags().Changed("jetstream")
+	c.maxConsumersIsSet = cmd.Flags().Changed("js-consumers")
+	c.maxAckPendingIsSet = cmd.Flags().Changed("js-max-pending")
+	c.streamSizeRequiredIsSet = cmd.Flags().Changed("js-stream-size-required")
+	c.maxStreamsIsSet = cmd.Flags().Changed("js-streams")
+	c.clusterTrafficIsSet = cmd.Flags().Changed("js-cluster-traffic")
+	c.maxLeafNodesIsSet = cmd.Flags().Changed("leafnodes")
+	c.maxSubIsSet = cmd.Flags().Changed("subscriptions")
+
 	auth, operator, err := c.selectOperator(true)
 	if err != nil {
 		return err
@@ -1220,7 +1327,20 @@ func (c *authAccountCommand) loadMappingsConfig() (map[string][]ab.Mapping, erro
 
 }
 
-func (c *authAccountCommand) mappingAddAction(_ *fisk.ParseContext) error {
+func (c *authAccountCommand) mappingAddAction(_ *cobra.Command, args []string) error {
+	c.accountName = argValue(args, 0)
+	c.mapSource = argValue(args, 1)
+	c.mapTarget = argValue(args, 2)
+	c.mapWeight = 100
+	if v := argValue(args, 3); v != "" {
+		w, err := strconv.ParseUint(v, 10, 64)
+		if err != nil {
+			return err
+		}
+		c.mapWeight = uint(w)
+	}
+	c.mapCluster = argValue(args, 4)
+
 	var err error
 	mappings := map[string][]ab.Mapping{}
 	if c.inputFile != "" {
@@ -1289,7 +1409,10 @@ func (c *authAccountCommand) mappingAddAction(_ *fisk.ParseContext) error {
 	return c.fShowMappings(os.Stdout, mappings)
 }
 
-func (c *authAccountCommand) mappingInfoAction(_ *fisk.ParseContext) error {
+func (c *authAccountCommand) mappingInfoAction(_ *cobra.Command, args []string) error {
+	c.accountName = argValue(args, 0)
+	c.mapSource = argValue(args, 1)
+
 	_, _, acct, err := c.selectAccount(true)
 	if err != nil {
 		return err
@@ -1319,7 +1442,9 @@ func (c *authAccountCommand) mappingInfoAction(_ *fisk.ParseContext) error {
 	return c.fShowMappings(os.Stdout, mappings)
 }
 
-func (c *authAccountCommand) mappingListAction(_ *fisk.ParseContext) error {
+func (c *authAccountCommand) mappingListAction(_ *cobra.Command, args []string) error {
+	c.accountName = argValue(args, 0)
+
 	_, _, acct, err := c.selectAccount(true)
 	if err != nil {
 		return err
@@ -1345,7 +1470,10 @@ func (c *authAccountCommand) mappingListAction(_ *fisk.ParseContext) error {
 	return nil
 }
 
-func (c *authAccountCommand) mappingRmAction(_ *fisk.ParseContext) error {
+func (c *authAccountCommand) mappingRmAction(_ *cobra.Command, args []string) error {
+	c.accountName = argValue(args, 0)
+	c.mapSource = argValue(args, 1)
+
 	auth, _, acct, err := c.selectAccount(true)
 	if err != nil {
 		return err

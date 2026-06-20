@@ -18,15 +18,16 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/choria-io/fisk"
 	"github.com/dustin/go-humanize"
 	"github.com/nats-io/jsm.go/serverdata"
 	"github.com/nats-io/nats-server/v2/server"
 	iu "github.com/nats-io/natscli/internal/util"
+	"github.com/spf13/cobra"
 )
 
 type SrvLsCmd struct {
@@ -47,20 +48,30 @@ type srvListCluster struct {
 	routeSizes []int
 }
 
-func configureServerListCommand(srv *fisk.CmdClause) {
+func configureServerListCommand(srv commandHost) {
 	c := &SrvLsCmd{}
 
-	ls := srv.Command("list", "List known servers").Alias("ls").Action(c.list)
-	ls.Tag("scope:system", "impact:ro")
-	ls.Arg("expect", "How many servers to expect").Uint32Var(&c.expect)
-	ls.Flag("json", "Produce JSON output").Short('j').UnNegatableBoolVar(&c.json)
-	ls.Flag("sort", "Sort servers by a specific key (name,cluster,conns,subs,routes,gws,mem,cpu,slow,uptime,rtt").Default("rtt").EnumVar(&c.sort, strings.Split("name,cluster,conns,conn,subs,sub,routes,route,gw,mem,cpu,slow,uptime,rtt", ",")...)
-	ls.Flag("reverse", "Reverse sort servers").Short('R').UnNegatableBoolVar(&c.reverse)
-	ls.Flag("compact", "Compact server names").Default("true").BoolVar(&c.compact)
-	ls.Flag("archive", "Read data from an archive file").StringVar(&c.archivePath)
+	ls := addCommand(srv, "list", "List known servers")
+	ls.Aliases = []string{"ls"}
+	ls.RunE = c.list
+	cmdAddTags(ls, "scope:system", "impact:ro")
+	addArg(ls, "expect", "How many servers to expect", false, "uint32")
+	ls.Flags().BoolVarP(&c.json, "json", "j", false, "Produce JSON output")
+	ls.Flags().Var(newEnumValue(&c.sort, "rtt", strings.Split("name,cluster,conns,conn,subs,sub,routes,route,gw,mem,cpu,slow,uptime,rtt", ",")...), "sort", "Sort servers by a specific key (name,cluster,conns,subs,routes,gws,mem,cpu,slow,uptime,rtt")
+	ls.Flags().BoolVarP(&c.reverse, "reverse", "R", false, "Reverse sort servers")
+	negatableBoolVar(ls, &c.compact, "compact", true, "Compact server names")
+	ls.Flags().StringVar(&c.archivePath, "archive", "", "Read data from an archive file")
 }
 
-func (c *SrvLsCmd) list(_ *fisk.ParseContext) error {
+func (c *SrvLsCmd) list(_ *cobra.Command, args []string) error {
+	if v := argValue(args, 0); v != "" {
+		n, err := strconv.ParseUint(v, 10, 32)
+		if err != nil {
+			return fmt.Errorf("invalid expect value %q: %w", v, err)
+		}
+		c.expect = uint32(n)
+	}
+
 	type result struct {
 		*server.ServerStatsMsg
 		rtt time.Duration

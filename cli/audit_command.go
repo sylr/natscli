@@ -14,7 +14,7 @@
 package cli
 
 func configureAuditCommand(app commandHost) {
-	audit := app.Command("audit", "Audit a NATS deployment")
+	audit := addCommand(app, "audit", "Audit a NATS deployment")
 
 	configureAuditAnalyzeCommand(audit)
 	configureAuditChecksCommand(audit)

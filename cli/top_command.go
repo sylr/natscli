@@ -15,9 +15,10 @@ package cli
 
 import (
 	"fmt"
-	"github.com/choria-io/fisk"
+
 	"github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/natscli/top"
+	"github.com/spf13/cobra"
 	ui "gopkg.in/gizak/termui.v1"
 )
 
@@ -37,24 +38,27 @@ type topCmd struct {
 func configureTopCommand(app commandHost) {
 	c := &topCmd{}
 
-	top := app.Command("top", "Shows top-like statistic for connections on a specific server").Action(c.topAction)
-	top.Arg("name", "The server name to gather statistics for").Required().StringVar(&c.host)
-	top.Flag("conns", "Maximum number of connections to show").Default("1024").Short('n').IntVar(&c.conns)
-	top.Flag("interval", "Refresh interval").Default("1").Short('d').IntVar(&c.delay)
-	top.Flag("sort", "Sort connections by").Default("cid").EnumVar(&c.sort, "cid", "start", "subs", "pending", "msgs_to", "msgs_from", "bytes_to", "bytes_from", "last", "idle", "uptime", "stop", "reason", "rtt")
-	top.Flag("lookup", "Looks up client addresses in DNS").Default("false").UnNegatableBoolVar(&c.lookup)
-	top.Flag("output", "Saves the first snapshot to a file").Short('o').StringVar(&c.output)
-	top.Flag("delimiter", "Specifies a output delimiter, defaults to grid-like text").StringVar(&c.outputDelimiter)
-	top.Flag("raw", "Show raw bytes").Short('b').Default("false").UnNegatableBoolVar(&c.raw)
-	top.Flag("max-refresh", "Maximum refreshes").Short('r').Default("-1").IntVar(&c.maxRefresh)
-	top.Flag("subs", "Shows the subscriptions column").Default("false").UnNegatableBoolVar(&c.showSubs)
+	top := addCommand(app, "top", "Shows top-like statistic for connections on a specific server")
+	top.RunE = c.topAction
+	addArg(top, "name", "The server name to gather statistics for", true, "string")
+	top.Flags().IntVarP(&c.conns, "conns", "n", 1024, "Maximum number of connections to show")
+	top.Flags().IntVarP(&c.delay, "interval", "d", 1, "Refresh interval")
+	top.Flags().Var(newEnumValue(&c.sort, "cid", "cid", "start", "subs", "pending", "msgs_to", "msgs_from", "bytes_to", "bytes_from", "last", "idle", "uptime", "stop", "reason", "rtt"), "sort", "Sort connections by")
+	top.Flags().BoolVar(&c.lookup, "lookup", false, "Looks up client addresses in DNS")
+	top.Flags().StringVarP(&c.output, "output", "o", "", "Saves the first snapshot to a file")
+	top.Flags().StringVar(&c.outputDelimiter, "delimiter", "", "Specifies a output delimiter, defaults to grid-like text")
+	top.Flags().BoolVarP(&c.raw, "raw", "b", false, "Show raw bytes")
+	top.Flags().IntVarP(&c.maxRefresh, "max-refresh", "r", -1, "Maximum refreshes")
+	top.Flags().BoolVar(&c.showSubs, "subs", false, "Shows the subscriptions column")
 }
 
 func init() {
 	registerCommand("top", 17, configureTopCommand)
 }
 
-func (c *topCmd) topAction(_ *fisk.ParseContext) error {
+func (c *topCmd) topAction(_ *cobra.Command, args []string) error {
+	c.host = args[0]
+
 	nc, _, err := prepareHelper("", natsOpts()...)
 	if err != nil {
 		return err

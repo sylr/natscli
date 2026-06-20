@@ -17,13 +17,14 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/choria-io/fisk"
 	"github.com/nats-io/natscli/internal/exporter"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+
+	"github.com/spf13/cobra"
 )
 
-func (c *SrvCheckCmd) exporterAction(_ *fisk.ParseContext) error {
+func (c *SrvCheckCmd) exporterAction(_ *cobra.Command, _ []string) error {
 	exp, err := exporter.NewExporter(opts().PrometheusNamespace, c.exporterConfigFile)
 	if err != nil {
 		return err

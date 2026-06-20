@@ -27,8 +27,7 @@ import (
 
 	"github.com/kballard/go-shellquote"
 	"github.com/nats-io/nats.go"
-
-	"github.com/choria-io/fisk"
+	"github.com/spf13/cobra"
 )
 
 type replyCmd struct {
@@ -56,13 +55,13 @@ This will request the weather for london when invoked as:
   nats request weather.london ''
 
 Use {{.Request}} to access the request body within the --command
-  
+
 The command gets also spawned with two ENVs:
   NATS_REQUEST_SUBJECT
   NATS_REQUEST_BODY
 
-  nats reply 'echo' --command="printenv NATS_REQUEST_BODY" 
-  
+  nats reply 'echo' --command="printenv NATS_REQUEST_BODY"
+
 The body and Header values of the messages may use Go templates to create unique messages.
 
    nats reply test "Message {{Count}} @ {{Time}}"
@@ -79,25 +78,31 @@ Available template functions are:
    Random(min, max) random string at least min long, at most max
 `
 
-	act := app.Command("reply", "Generic service reply utility").Action(c.reply)
-	act.Tag("scope:user", "impact:rw")
-	act.HelpLong(help)
+	act := addCommand(app, "reply", "Generic service reply utility")
+	act.RunE = c.reply
+	act.Annotations = map[string]string{}
+	cmdAddTags(act, "scope:user", "impact:rw")
+	act.Long = help
 	addCheat("reply", act)
-	act.Arg("subject", "Subject to subscribe to").Required().StringVar(&c.subject)
-	act.Arg("body", "Reply body").StringVar(&c.body)
-	act.Flag("echo", "Echo back what is received").UnNegatableBoolVar(&c.echo)
-	act.Flag("command", "Runs a command and responds with the output if exit code was 0").StringVar(&c.command)
-	act.Flag("queue", "Queue group name").Default("NATS-RPLY-22").Short('q').StringVar(&c.queue)
-	act.Flag("sleep", "Inject a random sleep delay between replies up to this duration max").PlaceHolder("MAX").DurationVar(&c.sleep)
-	act.Flag("header", "Adds headers to the message using K:V format").Short('H').StringsVar(&c.hdrs)
-	act.Flag("count", "Quit after receiving this many messages").UintVar(&c.limit)
+	addArg(act, "subject", "Subject to subscribe to", true, "string")
+	addArg(act, "body", "Reply body", false, "string")
+	act.Flags().BoolVar(&c.echo, "echo", false, "Echo back what is received")
+	act.Flags().StringVar(&c.command, "command", "", "Runs a command and responds with the output if exit code was 0")
+	act.Flags().StringVarP(&c.queue, "queue", "q", "NATS-RPLY-22", "Queue group name")
+	act.Flags().DurationVar(&c.sleep, "sleep", 0, "Inject a random sleep delay between replies up to this duration max")
+	flagPlaceholder(act, "sleep", "MAX")
+	act.Flags().StringArrayVarP(&c.hdrs, "header", "H", nil, "Adds headers to the message using K:V format")
+	act.Flags().UintVar(&c.limit, "count", 0, "Quit after receiving this many messages")
 }
 
 func init() {
 	registerCommand("reply", 12, configureReplyCommand)
 }
 
-func (c *replyCmd) reply(_ *fisk.ParseContext) error {
+func (c *replyCmd) reply(_ *cobra.Command, args []string) error {
+	c.subject = args[0]
+	c.body = argValue(args, 1)
+
 	nc, err := newNatsConn("", natsOpts()...)
 	if err != nil {
 		return err

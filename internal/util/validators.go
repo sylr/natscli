@@ -16,12 +16,13 @@ package util
 import (
 	"fmt"
 	"strconv"
-
-	"github.com/choria-io/fisk"
 )
 
+// OptionValidator validates the string form of a flag or argument value.
+type OptionValidator func(string) error
+
 // Int64RangeValidator validates an integer is in a range inclusive of the given values
-func Int64RangeValidator(min int64, max int64) fisk.OptionValidator {
+func Int64RangeValidator(min int64, max int64) OptionValidator {
 	return func(v string) error {
 		iv, err := strconv.ParseInt(v, 10, 64)
 		if err != nil {

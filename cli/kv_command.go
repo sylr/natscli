@@ -20,6 +20,7 @@ import (
 	"math"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -33,7 +34,7 @@ import (
 	iu "github.com/nats-io/natscli/internal/util"
 	"golang.org/x/term"
 
-	"github.com/choria-io/fisk"
+	"github.com/spf13/cobra"
 )
 
 type kvCommand struct {
@@ -97,131 +98,159 @@ The JetStream Key-Value store uses streams to store key-value pairs
 for an indefinite period or a per-bucket configured TTL.
 `
 
-	kv := app.Command("kv", help)
+	kv := addCommand(app, "kv", help)
 	addCheat("kv", kv)
 
-	addCreateFlags := func(f *fisk.CmdClause, edit bool) {
-		f.Arg("bucket", "The bucket to act on").Required().StringVar(&c.bucket)
-		f.Flag("description", "A description for the bucket").IsSetByUser(&c.descriptionSet).StringVar(&c.description)
-		f.Flag("history", "How many historic values to keep per key").IsSetByUser(&c.historySet).Default("1").Validator(iu.Int64RangeValidator(1, 64)).Int64Var(&c.history)
+	addCreateFlags := func(f *cobra.Command, edit bool) {
+		addArg(f, "bucket", "The bucket to act on", true, "string")
+		f.Flags().StringVar(&c.description, "description", "", "A description for the bucket")
+		f.Flags().Var(newValidatedInt64Value(&c.history, 1, iu.Int64RangeValidator(1, 64)), "history", "How many historic values to keep per key")
 		if !edit {
-			f.Flag("storage", "Storage backend to use (file, memory)").EnumVar(&c.storage, "file", "f", "memory", "m")
+			f.Flags().Var(newEnumValue(&c.storage, "", "file", "f", "memory", "m"), "storage", "Storage backend to use (file, memory)")
 		}
-		f.Flag("ttl", "How long to keep values for").IsSetByUser(&c.ttlSet).PlaceHolder("DURATION").DurationVar(&c.ttl)
-		f.Flag("marker-ttl", "Enables Per-Key TTLs and Limit Markers").IsSetByUser(&c.markerTTLSet).PlaceHolder("DURATION").DurationVar(&c.limitsMarkerTTL)
-		f.Flag("replicas", "How many replicas of the data to store").IsSetByUser(&c.replicaSet).Default("1").UintVar(&c.replicas)
-		f.Flag("max-value-size", "Maximum size for any single value").IsSetByUser(&c.maxValueSizeSet).PlaceHolder("BYTES").StringVar(&c.maxValueSizeString)
-		f.Flag("max-bucket-size", "Maximum size for the bucket").IsSetByUser(&c.maxBucketSizeSet).PlaceHolder("BYTES").StringVar(&c.maxBucketSizeString)
-		f.Flag("tags", "Place the bucket on servers that has specific tags").IsSetByUser(&c.tagsSet).StringsVar(&c.placementTags)
-		f.Flag("cluster", "Place the bucket on a specific cluster").IsSetByUser(&c.clusterSet).StringVar(&c.placementCluster)
-		f.Flag("compress", "Compress the bucket data").IsSetByUser(&c.compressSet).BoolVar(&c.compression)
-		f.Flag("metadata", "Adds metadata to the stream").PlaceHolder("META").IsSetByUser(&c.metadataIsSet).StringMapVar(&c.metadata)
-		f.Flag("republish-source", "Republish messages to --republish-destination").IsSetByUser(&c.republishSourceSet).PlaceHolder("SRC").StringVar(&c.repubSource)
-		f.Flag("republish-destination", "Republish destination for messages in --republish-source").IsSetByUser(&c.republishDestinationSet).PlaceHolder("DEST").StringVar(&c.repubDest)
-		f.Flag("republish-headers", "Republish only message headers, no bodies").IsSetByUser(&c.republishHeadersSet).UnNegatableBoolVar(&c.repubHeadersOnly)
+		f.Flags().DurationVar(&c.ttl, "ttl", 0, "How long to keep values for")
+		flagPlaceholder(f, "ttl", "DURATION")
+		f.Flags().DurationVar(&c.limitsMarkerTTL, "marker-ttl", 0, "Enables Per-Key TTLs and Limit Markers")
+		flagPlaceholder(f, "marker-ttl", "DURATION")
+		f.Flags().UintVar(&c.replicas, "replicas", 1, "How many replicas of the data to store")
+		f.Flags().StringVar(&c.maxValueSizeString, "max-value-size", "", "Maximum size for any single value")
+		flagPlaceholder(f, "max-value-size", "BYTES")
+		f.Flags().StringVar(&c.maxBucketSizeString, "max-bucket-size", "", "Maximum size for the bucket")
+		flagPlaceholder(f, "max-bucket-size", "BYTES")
+		f.Flags().StringArrayVar(&c.placementTags, "tags", nil, "Place the bucket on servers that has specific tags")
+		f.Flags().StringVar(&c.placementCluster, "cluster", "", "Place the bucket on a specific cluster")
+		negatableBoolVar(f, &c.compression, "compress", false, "Compress the bucket data")
+		f.Flags().Var(newStringMapValue(&c.metadata), "metadata", "Adds metadata to the stream")
+		flagPlaceholder(f, "metadata", "META")
+		f.Flags().StringVar(&c.repubSource, "republish-source", "", "Republish messages to --republish-destination")
+		flagPlaceholder(f, "republish-source", "SRC")
+		f.Flags().StringVar(&c.repubDest, "republish-destination", "", "Republish destination for messages in --republish-source")
+		flagPlaceholder(f, "republish-destination", "DEST")
+		f.Flags().BoolVar(&c.repubHeadersOnly, "republish-headers", false, "Republish only message headers, no bodies")
 		if edit {
-			f.Flag("no-mirror", "Removes mirror configuration from a bucket").BoolVar(&c.noMirror)
+			negatableBoolVar(f, &c.noMirror, "no-mirror", false, "Removes mirror configuration from a bucket")
 		} else {
-			f.Flag("mirror", "Creates a mirror of a different bucket").StringVar(&c.mirror)
-			f.Flag("mirror-domain", "When mirroring find the bucket in a different domain").StringVar(&c.mirrorDomain)
+			f.Flags().StringVar(&c.mirror, "mirror", "", "Creates a mirror of a different bucket")
+			f.Flags().StringVar(&c.mirrorDomain, "mirror-domain", "", "When mirroring find the bucket in a different domain")
 		}
-		f.Flag("source", "Source from a different bucket").IsSetByUser(&c.sourceSet).PlaceHolder("BUCKET").StringsVar(&c.sources)
+		f.Flags().StringArrayVar(&c.sources, "source", nil, "Source from a different bucket")
+		flagPlaceholder(f, "source", "BUCKET")
 	}
 
-	add := kv.Command("add", "Adds a new KV Store Bucket").Alias("new").Action(c.addAction)
-	add.Tag("scope:user", "impact:rw")
+	add := addCommand(kv, "add", "Adds a new KV Store Bucket")
+	add.Aliases = []string{"new"}
+	add.RunE = c.addAction
+	cmdAddTags(add, "scope:user", "impact:rw")
 	addCreateFlags(add, false)
-	add.PreAction(c.parseLimitStrings)
+	add.PreRunE = c.parseLimitStrings
 
-	edit := kv.Command("edit", "Edits an existing KV Store Bucket").Action(c.editAction)
-	edit.Tag("scope:user", "impact:rw")
+	edit := addCommand(kv, "edit", "Edits an existing KV Store Bucket")
+	edit.RunE = c.editAction
+	cmdAddTags(edit, "scope:user", "impact:rw")
 	addCreateFlags(edit, true)
-	edit.PreAction(c.parseLimitStrings)
+	edit.PreRunE = c.parseLimitStrings
 
-	put := kv.Command("put", "Puts a value into a key").Action(c.putAction)
-	put.Tag("scope:user", "impact:rw")
-	put.Arg("bucket", "The bucket to act on").Required().StringVar(&c.bucket)
-	put.Arg("key", "The key to act on").Required().StringVar(&c.key)
-	put.Arg("value", "The value to store, when empty reads STDIN").StringVar(&c.val)
+	put := addCommand(kv, "put", "Puts a value into a key")
+	put.RunE = c.putAction
+	cmdAddTags(put, "scope:user", "impact:rw")
+	addArg(put, "bucket", "The bucket to act on", true, "string")
+	addArg(put, "key", "The key to act on", true, "string")
+	addArg(put, "value", "The value to store, when empty reads STDIN", false, "string")
 
-	get := kv.Command("get", "Gets a value for a key").Action(c.getAction)
-	get.Tag("scope:user", "impact:ro")
-	get.Arg("bucket", "The bucket to act on").Required().StringVar(&c.bucket)
-	get.Arg("key", "The key to act on").Required().StringVar(&c.key)
-	get.Flag("revision", "Gets a specific revision").Uint64Var(&c.revision)
-	get.Flag("raw", "Show only the value string").UnNegatableBoolVar(&c.raw)
+	get := addCommand(kv, "get", "Gets a value for a key")
+	get.RunE = c.getAction
+	cmdAddTags(get, "scope:user", "impact:ro")
+	addArg(get, "bucket", "The bucket to act on", true, "string")
+	addArg(get, "key", "The key to act on", true, "string")
+	get.Flags().Uint64Var(&c.revision, "revision", 0, "Gets a specific revision")
+	get.Flags().BoolVar(&c.raw, "raw", false, "Show only the value string")
 
-	create := kv.Command("create", "Puts a value into a key only if the key is new or it's last operation was a delete").Action(c.createAction)
-	create.Tag("scope:user", "impact:rw")
-	create.Arg("bucket", "The bucket to act on").Required().StringVar(&c.bucket)
-	create.Arg("key", "The key to act on").Required().StringVar(&c.key)
-	create.Arg("value", "The value to store, when empty reads STDIN").StringVar(&c.val)
-	create.Flag("ttl", "Sets a TTL for the key").PlaceHolder("DURATION").DurationVar(&c.keyTTL)
+	create := addCommand(kv, "create", "Puts a value into a key only if the key is new or it's last operation was a delete")
+	create.RunE = c.createAction
+	cmdAddTags(create, "scope:user", "impact:rw")
+	addArg(create, "bucket", "The bucket to act on", true, "string")
+	addArg(create, "key", "The key to act on", true, "string")
+	addArg(create, "value", "The value to store, when empty reads STDIN", false, "string")
+	create.Flags().DurationVar(&c.keyTTL, "ttl", 0, "Sets a TTL for the key")
+	flagPlaceholder(create, "ttl", "DURATION")
 
-	update := kv.Command("update", "Updates a key with a new value if the previous value matches the given revision").Action(c.updateAction)
-	update.Tag("scope:user", "impact:rw")
-	update.Arg("bucket", "The bucket to act on").Required().StringVar(&c.bucket)
-	update.Arg("key", "The key to act on").Required().StringVar(&c.key)
-	update.Arg("value", "The value to store").Required().StringVar(&c.val)
-	update.Arg("revision", "The revision of the previous value in the bucket").Required().Uint64Var(&c.revision)
+	update := addCommand(kv, "update", "Updates a key with a new value if the previous value matches the given revision")
+	update.RunE = c.updateAction
+	cmdAddTags(update, "scope:user", "impact:rw")
+	addArg(update, "bucket", "The bucket to act on", true, "string")
+	addArg(update, "key", "The key to act on", true, "string")
+	addArg(update, "value", "The value to store", true, "string")
+	addArg(update, "revision", "The revision of the previous value in the bucket", true, "uint")
 
-	del := kv.Command("del", "Deletes a key or the entire bucket").Alias("rm").Action(c.deleteAction)
-	del.Tag("scope:user", "impact:rw")
-	del.Arg("bucket", "The bucket to act on").Required().StringVar(&c.bucket)
-	del.Arg("key", "The key to act on").StringVar(&c.key)
-	del.Flag("force", "Act without confirmation").Short('f').UnNegatableBoolVar(&c.force)
+	del := addCommand(kv, "del", "Deletes a key or the entire bucket")
+	del.Aliases = []string{"rm"}
+	del.RunE = c.deleteAction
+	cmdAddTags(del, "scope:user", "impact:rw")
+	addArg(del, "bucket", "The bucket to act on", true, "string")
+	addArg(del, "key", "The key to act on", false, "string")
+	del.Flags().BoolVarP(&c.force, "force", "f", false, "Act without confirmation")
 
-	purge := kv.Command("purge", "Deletes a key from the bucket, clearing history before creating a delete marker").Action(c.purgeAction)
-	purge.Tag("scope:user", "impact:rw")
-	purge.Arg("bucket", "The bucket to act on").Required().StringVar(&c.bucket)
-	purge.Arg("key", "The key to act on").Required().StringVar(&c.key)
-	purge.Flag("force", "Act without confirmation").Short('f').UnNegatableBoolVar(&c.force)
-	purge.Flag("ttl", "Sets a TTL for the purge marker").PlaceHolder("DURATION").DurationVar(&c.keyTTL)
+	purge := addCommand(kv, "purge", "Deletes a key from the bucket, clearing history before creating a delete marker")
+	purge.RunE = c.purgeAction
+	cmdAddTags(purge, "scope:user", "impact:rw")
+	addArg(purge, "bucket", "The bucket to act on", true, "string")
+	addArg(purge, "key", "The key to act on", true, "string")
+	purge.Flags().BoolVarP(&c.force, "force", "f", false, "Act without confirmation")
+	purge.Flags().DurationVar(&c.keyTTL, "ttl", 0, "Sets a TTL for the purge marker")
+	flagPlaceholder(purge, "ttl", "DURATION")
 
-	history := kv.Command("history", "Shows the full history for a key").Action(c.historyAction)
-	history.Tag("scope:user", "impact:ro")
-	history.Arg("bucket", "The bucket to act on").Required().StringVar(&c.bucket)
-	history.Arg("key", "The key to act on").Required().StringVar(&c.key)
+	history := addCommand(kv, "history", "Shows the full history for a key")
+	history.RunE = c.historyAction
+	cmdAddTags(history, "scope:user", "impact:ro")
+	addArg(history, "bucket", "The bucket to act on", true, "string")
+	addArg(history, "key", "The key to act on", true, "string")
 
-	revert := kv.Command("revert", "Reverts a value to a previous revision using put").Action(c.revertAction)
-	revert.Tag("scope:user", "impact:rw")
-	revert.Arg("bucket", "The bucket to act on").Required().StringVar(&c.bucket)
-	revert.Arg("key", "The key to act on").Required().StringVar(&c.key)
-	revert.Arg("revision", "The revision to revert to").Required().Uint64Var(&c.revision)
-	revert.Flag("force", "Force reverting without prompting").BoolVar(&c.force)
+	revert := addCommand(kv, "revert", "Reverts a value to a previous revision using put")
+	revert.RunE = c.revertAction
+	cmdAddTags(revert, "scope:user", "impact:rw")
+	addArg(revert, "bucket", "The bucket to act on", true, "string")
+	addArg(revert, "key", "The key to act on", true, "string")
+	addArg(revert, "revision", "The revision to revert to", true, "uint")
+	negatableBoolVar(revert, &c.force, "force", false, "Force reverting without prompting")
 
-	status := kv.Command("info", "View the status of a KV store").Alias("view").Alias("status").Action(c.infoAction)
-	status.Tag("scope:user", "impact:ro")
-	status.Arg("bucket", "The bucket to act on").StringVar(&c.bucket)
+	status := addCommand(kv, "info", "View the status of a KV store")
+	status.Aliases = []string{"view", "status"}
+	status.RunE = c.infoAction
+	cmdAddTags(status, "scope:user", "impact:ro")
+	addArg(status, "bucket", "The bucket to act on", false, "string")
 
-	watch := kv.Command("watch", "Watch the bucket or a specific key for updated").Action(c.watchAction)
-	watch.Tag("scope:user", "impact:ro")
-	watch.Arg("bucket", "The bucket to act on").Required().StringVar(&c.bucket)
-	watch.Arg("key", "The key to act on").Default(">").StringVar(&c.key)
-	watch.Flag("history", "Includes historic values").UnNegatableBoolVar(&c.includeHistory)
-	watch.Flag("deletes", "Includes deletes in watched values").Default("true").BoolVar(&c.includeDeletes)
-	watch.Flag("updates", "Only show new values written").UnNegatableBoolVar(&c.updatesOnly)
-	watch.Flag("revision", "Starts from a certain revision").Uint64Var(&c.revision)
+	watch := addCommand(kv, "watch", "Watch the bucket or a specific key for updated")
+	watch.RunE = c.watchAction
+	cmdAddTags(watch, "scope:user", "impact:ro")
+	addArg(watch, "bucket", "The bucket to act on", true, "string")
+	addArgWithDefault(watch, "key", "The key to act on", ">", "string")
+	watch.Flags().BoolVar(&c.includeHistory, "history", false, "Includes historic values")
+	negatableBoolVar(watch, &c.includeDeletes, "deletes", true, "Includes deletes in watched values")
+	watch.Flags().BoolVar(&c.updatesOnly, "updates", false, "Only show new values written")
+	watch.Flags().Uint64Var(&c.revision, "revision", 0, "Starts from a certain revision")
 
-	ls := kv.Command("ls", "List available buckets or the keys in a bucket").Alias("list").Action(c.lsAction)
-	ls.Tag("scope:user", "impact:ro")
-	ls.Arg("bucket", "The bucket to list the keys").StringVar(&c.bucket)
-	ls.Arg("key", "The key to act on").Default("").StringVar(&c.key)
-	ls.Flag("names", "Show just the bucket names").Short('n').UnNegatableBoolVar(&c.listNames)
-	ls.Flag("verbose", "Show detailed info about the key").Short('v').UnNegatableBoolVar(&c.lsVerbose)
-	ls.Flag("display-value", "Display value in verbose output (has no effect without 'verbose')").UnNegatableBoolVar(&c.lsVerboseDisplayValue)
+	ls := addCommand(kv, "ls", "List available buckets or the keys in a bucket")
+	ls.Aliases = []string{"list"}
+	ls.RunE = c.lsAction
+	cmdAddTags(ls, "scope:user", "impact:ro")
+	addArg(ls, "bucket", "The bucket to list the keys", false, "string")
+	addArgWithDefault(ls, "key", "The key to act on", "", "string")
+	ls.Flags().BoolVarP(&c.listNames, "names", "n", false, "Show just the bucket names")
+	ls.Flags().BoolVarP(&c.lsVerbose, "verbose", "v", false, "Show detailed info about the key")
+	ls.Flags().BoolVar(&c.lsVerboseDisplayValue, "display-value", false, "Display value in verbose output (has no effect without 'verbose')")
 
-	rmHistory := kv.Command("compact", "Reclaim space used by deleted keys").Action(c.compactAction)
-	rmHistory.Tag("scope:user", "impact:rw")
-	rmHistory.Arg("bucket", "The bucket to act on").Required().StringVar(&c.bucket)
-	rmHistory.Flag("force", "Act without confirmation").Short('f').UnNegatableBoolVar(&c.force)
+	rmHistory := addCommand(kv, "compact", "Reclaim space used by deleted keys")
+	rmHistory.RunE = c.compactAction
+	cmdAddTags(rmHistory, "scope:user", "impact:rw")
+	addArg(rmHistory, "bucket", "The bucket to act on", true, "string")
+	rmHistory.Flags().BoolVarP(&c.force, "force", "f", false, "Act without confirmation")
 }
 
 func init() {
 	registerCommand("kv", 9, configureKVCommand)
 }
 
-func (c *kvCommand) parseLimitStrings(_ *fisk.ParseContext) (err error) {
+func (c *kvCommand) parseLimitStrings(_ *cobra.Command, _ []string) (err error) {
 	if c.maxValueSizeString != "" {
 		c.maxValueSize, err = iu.ParseStringAsBytes(c.maxValueSizeString, 32)
 		if err != nil {
@@ -252,7 +281,10 @@ func (c *kvCommand) strForOp(op jetstream.KeyValueOp) string {
 	}
 }
 
-func (c *kvCommand) lsAction(_ *fisk.ParseContext) error {
+func (c *kvCommand) lsAction(_ *cobra.Command, args []string) error {
+	c.bucket = argValue(args, 0)
+	c.key = argValue(args, 1)
+
 	if c.bucket != "" {
 		return c.lsBucketKeys()
 	}
@@ -394,7 +426,15 @@ func (c *kvCommand) lsBuckets() error {
 	return nil
 }
 
-func (c *kvCommand) revertAction(pc *fisk.ParseContext) error {
+func (c *kvCommand) revertAction(cmd *cobra.Command, args []string) error {
+	c.bucket = args[0]
+	c.key = args[1]
+	revision, err := strconv.ParseUint(args[2], 10, 64)
+	if err != nil {
+		return err
+	}
+	c.revision = revision
+
 	_, _, store, err := c.loadBucket()
 	if err != nil {
 		return err
@@ -422,7 +462,7 @@ func (c *kvCommand) revertAction(pc *fisk.ParseContext) error {
 
 		fmt.Printf("Revision: %d\n\n%v\n\n", rev.Revision(), val)
 		ok, err := askConfirmation(fmt.Sprintf("Really revert to revision %d", c.revision), false)
-		fisk.FatalIfError(err, "could not obtain confirmation")
+		fatalIfError(err, "could not obtain confirmation")
 		if !ok {
 			return nil
 		}
@@ -436,10 +476,13 @@ func (c *kvCommand) revertAction(pc *fisk.ParseContext) error {
 		return err
 	}
 
-	return c.historyAction(pc)
+	return c.historyAction(cmd, args)
 }
 
-func (c *kvCommand) historyAction(_ *fisk.ParseContext) error {
+func (c *kvCommand) historyAction(_ *cobra.Command, args []string) error {
+	c.bucket = args[0]
+	c.key = args[1]
+
 	_, _, store, err := c.loadBucket()
 	if err != nil {
 		return err
@@ -466,7 +509,9 @@ func (c *kvCommand) historyAction(_ *fisk.ParseContext) error {
 	return nil
 }
 
-func (c *kvCommand) compactAction(_ *fisk.ParseContext) error {
+func (c *kvCommand) compactAction(_ *cobra.Command, args []string) error {
+	c.bucket = args[0]
+
 	_, _, store, err := c.loadBucket()
 	if err != nil {
 		return err
@@ -487,9 +532,12 @@ func (c *kvCommand) compactAction(_ *fisk.ParseContext) error {
 	return store.PurgeDeletes(ctx)
 }
 
-func (c *kvCommand) deleteAction(pc *fisk.ParseContext) error {
+func (c *kvCommand) deleteAction(cmd *cobra.Command, args []string) error {
+	c.bucket = args[0]
+	c.key = argValue(args, 1)
+
 	if c.key == "" {
-		return c.rmBucketAction(pc)
+		return c.rmBucketAction(cmd, args)
 	}
 
 	_, _, store, err := c.loadBucket()
@@ -512,7 +560,24 @@ func (c *kvCommand) deleteAction(pc *fisk.ParseContext) error {
 	return store.Delete(ctx, c.key)
 }
 
-func (c *kvCommand) addAction(_ *fisk.ParseContext) error {
+func (c *kvCommand) addAction(cmd *cobra.Command, args []string) error {
+	c.bucket = args[0]
+	c.descriptionSet = cmd.Flags().Changed("description")
+	c.historySet = cmd.Flags().Changed("history")
+	c.ttlSet = cmd.Flags().Changed("ttl")
+	c.markerTTLSet = cmd.Flags().Changed("marker-ttl")
+	c.replicaSet = cmd.Flags().Changed("replicas")
+	c.maxValueSizeSet = cmd.Flags().Changed("max-value-size")
+	c.maxBucketSizeSet = cmd.Flags().Changed("max-bucket-size")
+	c.tagsSet = cmd.Flags().Changed("tags")
+	c.clusterSet = cmd.Flags().Changed("cluster")
+	c.compressSet = cmd.Flags().Changed("compress")
+	c.metadataIsSet = cmd.Flags().Changed("metadata")
+	c.republishSourceSet = cmd.Flags().Changed("republish-source")
+	c.republishDestinationSet = cmd.Flags().Changed("republish-destination")
+	c.republishHeadersSet = cmd.Flags().Changed("republish-headers")
+	c.sourceSet = cmd.Flags().Changed("source")
+
 	_, js, err := prepareJSHelper()
 	if err != nil {
 		return err
@@ -575,7 +640,24 @@ func (c *kvCommand) addAction(_ *fisk.ParseContext) error {
 	return c.showStatus(store)
 }
 
-func (c *kvCommand) editAction(_ *fisk.ParseContext) error {
+func (c *kvCommand) editAction(cmd *cobra.Command, args []string) error {
+	c.bucket = args[0]
+	c.descriptionSet = cmd.Flags().Changed("description")
+	c.historySet = cmd.Flags().Changed("history")
+	c.ttlSet = cmd.Flags().Changed("ttl")
+	c.markerTTLSet = cmd.Flags().Changed("marker-ttl")
+	c.replicaSet = cmd.Flags().Changed("replicas")
+	c.maxValueSizeSet = cmd.Flags().Changed("max-value-size")
+	c.maxBucketSizeSet = cmd.Flags().Changed("max-bucket-size")
+	c.tagsSet = cmd.Flags().Changed("tags")
+	c.clusterSet = cmd.Flags().Changed("cluster")
+	c.compressSet = cmd.Flags().Changed("compress")
+	c.metadataIsSet = cmd.Flags().Changed("metadata")
+	c.republishSourceSet = cmd.Flags().Changed("republish-source")
+	c.republishDestinationSet = cmd.Flags().Changed("republish-destination")
+	c.republishHeadersSet = cmd.Flags().Changed("republish-headers")
+	c.sourceSet = cmd.Flags().Changed("source")
+
 	_, js, err := prepareJSHelper()
 	if err != nil {
 		return err
@@ -686,7 +768,10 @@ func (c *kvCommand) editAction(_ *fisk.ParseContext) error {
 	return c.showStatus(store)
 }
 
-func (c *kvCommand) getAction(_ *fisk.ParseContext) error {
+func (c *kvCommand) getAction(_ *cobra.Command, args []string) error {
+	c.bucket = args[0]
+	c.key = args[1]
+
 	_, _, store, err := c.loadBucket()
 	if err != nil {
 		return err
@@ -723,7 +808,11 @@ func (c *kvCommand) getAction(_ *fisk.ParseContext) error {
 	return nil
 }
 
-func (c *kvCommand) putAction(_ *fisk.ParseContext) error {
+func (c *kvCommand) putAction(_ *cobra.Command, args []string) error {
+	c.bucket = args[0]
+	c.key = args[1]
+	c.val = argValue(args, 2)
+
 	_, _, store, err := c.loadBucket()
 	if err != nil {
 		return err
@@ -744,7 +833,11 @@ func (c *kvCommand) putAction(_ *fisk.ParseContext) error {
 	return err
 }
 
-func (c *kvCommand) createAction(_ *fisk.ParseContext) error {
+func (c *kvCommand) createAction(_ *cobra.Command, args []string) error {
+	c.bucket = args[0]
+	c.key = args[1]
+	c.val = argValue(args, 2)
+
 	_, _, store, err := c.loadBucket()
 	if err != nil {
 		return err
@@ -769,7 +862,16 @@ func (c *kvCommand) createAction(_ *fisk.ParseContext) error {
 	return err
 }
 
-func (c *kvCommand) updateAction(_ *fisk.ParseContext) error {
+func (c *kvCommand) updateAction(_ *cobra.Command, args []string) error {
+	c.bucket = args[0]
+	c.key = args[1]
+	c.val = args[2]
+	revision, err := strconv.ParseUint(args[3], 10, 64)
+	if err != nil {
+		return err
+	}
+	c.revision = revision
+
 	_, _, store, err := c.loadBucket()
 	if err != nil {
 		return err
@@ -853,7 +955,9 @@ func (c *kvCommand) knownBuckets(nc *nats.Conn) ([]string, error) {
 	return found, nil
 }
 
-func (c *kvCommand) infoAction(_ *fisk.ParseContext) error {
+func (c *kvCommand) infoAction(_ *cobra.Command, args []string) error {
+	c.bucket = argValue(args, 0)
+
 	_, _, store, err := c.loadBucket()
 	if err != nil {
 		return err
@@ -862,7 +966,13 @@ func (c *kvCommand) infoAction(_ *fisk.ParseContext) error {
 	return c.showStatus(store)
 }
 
-func (c *kvCommand) watchAction(_ *fisk.ParseContext) error {
+func (c *kvCommand) watchAction(_ *cobra.Command, args []string) error {
+	c.bucket = args[0]
+	c.key = ">"
+	if v := argValue(args, 1); v != "" {
+		c.key = v
+	}
+
 	_, _, store, err := c.loadBucket()
 	if err != nil {
 		return err
@@ -904,7 +1014,10 @@ func (c *kvCommand) watchAction(_ *fisk.ParseContext) error {
 	return nil
 }
 
-func (c *kvCommand) purgeAction(_ *fisk.ParseContext) error {
+func (c *kvCommand) purgeAction(_ *cobra.Command, args []string) error {
+	c.bucket = args[0]
+	c.key = args[1]
+
 	_, _, store, err := c.loadBucket()
 	if err != nil {
 		return err
@@ -929,7 +1042,7 @@ func (c *kvCommand) purgeAction(_ *fisk.ParseContext) error {
 	return store.Purge(ctx, c.key)
 }
 
-func (c *kvCommand) rmBucketAction(_ *fisk.ParseContext) error {
+func (c *kvCommand) rmBucketAction(_ *cobra.Command, _ []string) error {
 	if !c.force {
 		ok, err := askConfirmation(fmt.Sprintf("Delete bucket %s?", c.bucket), false)
 		if err != nil {

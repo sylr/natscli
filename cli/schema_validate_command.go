@@ -16,12 +16,12 @@ package cli
 import (
 	"encoding/json"
 	"fmt"
-	iu "github.com/nats-io/natscli/internal/util"
 	"io"
 	"os"
 	"strings"
 
-	"github.com/choria-io/fisk"
+	iu "github.com/nats-io/natscli/internal/util"
+	"github.com/spf13/cobra"
 )
 
 type schemaValidateCmd struct {
@@ -30,16 +30,21 @@ type schemaValidateCmd struct {
 	json   bool
 }
 
-func configureSchemaValidateCommand(schema *fisk.CmdClause) {
+func configureSchemaValidateCommand(schema *cobra.Command) {
 	c := &schemaValidateCmd{}
 
-	validate := schema.Command("validate", "Validates a JSON file against a schema").Alias("check").Action(c.validate)
-	validate.Arg("schema", "Schema ID to validate against").Required().StringVar(&c.schema)
-	validate.Arg("file", "JSON data to validate (- for stdin)").Required().StringVar(&c.file)
-	validate.Flag("json", "Produce JSON format output").UnNegatableBoolVar(&c.json)
+	validate := addCommand(schema, "validate", "Validates a JSON file against a schema")
+	validate.Aliases = []string{"check"}
+	validate.RunE = c.validate
+	addArg(validate, "schema", "Schema ID to validate against", true, "string")
+	addArg(validate, "file", "JSON data to validate (- for stdin)", true, "string")
+	validate.Flags().BoolVar(&c.json, "json", false, "Produce JSON format output")
 }
 
-func (c *schemaValidateCmd) validate(_ *fisk.ParseContext) error {
+func (c *schemaValidateCmd) validate(_ *cobra.Command, args []string) error {
+	c.schema = args[0]
+	c.file = args[1]
+
 	var f io.ReadCloser
 	var err error
 

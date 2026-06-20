@@ -15,11 +15,11 @@ package cli
 
 import (
 	"fmt"
-	iu "github.com/nats-io/natscli/internal/util"
 	"strings"
 
-	"github.com/choria-io/fisk"
 	"github.com/nats-io/jsm.go/api"
+	iu "github.com/nats-io/natscli/internal/util"
+	"github.com/spf13/cobra"
 )
 
 type schemaSearchCmd struct {
@@ -27,14 +27,21 @@ type schemaSearchCmd struct {
 	json   bool
 }
 
-func configureSchemaSearchCommand(schema *fisk.CmdClause) {
+func configureSchemaSearchCommand(schema *cobra.Command) {
 	c := &schemaSearchCmd{}
-	search := schema.Command("search", "Search schemas using a pattern").Alias("find").Alias("list").Alias("ls").Action(c.search)
-	search.Arg("pattern", "Regular expression to search for").Default(".").StringVar(&c.filter)
-	search.Flag("json", "Produce JSON format output").UnNegatableBoolVar(&c.json)
+	search := addCommand(schema, "search", "Search schemas using a pattern")
+	search.Aliases = []string{"find", "list", "ls"}
+	search.RunE = c.search
+	addArgWithDefault(search, "pattern", "Regular expression to search for", ".", "string")
+	search.Flags().BoolVar(&c.json, "json", false, "Produce JSON format output")
 }
 
-func (c *schemaSearchCmd) search(_ *fisk.ParseContext) error {
+func (c *schemaSearchCmd) search(_ *cobra.Command, args []string) error {
+	c.filter = "."
+	if v := argValue(args, 0); v != "" {
+		c.filter = v
+	}
+
 	found, err := api.SchemaSearch(c.filter)
 	if err != nil {
 		return fmt.Errorf("search failed: %s", err)

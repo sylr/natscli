@@ -29,7 +29,7 @@ import (
 	iu "github.com/nats-io/natscli/internal/util"
 	terminal "golang.org/x/term"
 
-	"github.com/choria-io/fisk"
+	"github.com/spf13/cobra"
 )
 
 type SrvWatchAccountCmd struct {
@@ -42,7 +42,7 @@ type SrvWatchAccountCmd struct {
 	mu        sync.Mutex
 }
 
-func configureServerWatchAccountCommand(watch *fisk.CmdClause) {
+func configureServerWatchAccountCommand(watch commandHost) {
 	c := &SrvWatchAccountCmd{
 		accounts: map[string]map[string]server.AccountNumConns{},
 		sortNames: map[string]string{
@@ -58,16 +58,18 @@ func configureServerWatchAccountCommand(watch *fisk.CmdClause) {
 	sortKeys := iu.MapKeys(c.sortNames)
 	sort.Strings(sortKeys)
 
-	accounts := watch.Command("accounts", "Watch account usage").Alias("account").Alias("acct").Action(c.accountsAction)
-	accounts.Tag("scope:system", "impact:ro")
-	accounts.HelpLong(`This waits for regular updates that each server sends and report seen totals.
+	accounts := addCommand(watch, "accounts", "Watch account usage")
+	accounts.Aliases = []string{"account", "acct"}
+	accounts.RunE = c.accountsAction
+	cmdAddTags(accounts, "scope:system", "impact:ro")
+	accounts.Long = `This waits for regular updates that each server sends and report seen totals.
 
 Since the updates are sent on a 30 second interval this is not a point in time view.
 The 'Servers' column will show how many servers sent statistics about an account.
 Only servers with active connections will send these updates.
-`)
-	accounts.Flag("sort", fmt.Sprintf("Sorts by a specific property (%s)", strings.Join(sortKeys, ", "))).Default("conns").EnumVar(&c.sort, sortKeys...)
-	accounts.Flag("number", "Amount of Accounts to show by the selected dimension").Default("0").Short('n').IntVar(&c.top)
+`
+	accounts.Flags().Var(newEnumValue(&c.sort, "conns", sortKeys...), "sort", fmt.Sprintf("Sorts by a specific property (%s)", strings.Join(sortKeys, ", ")))
+	accounts.Flags().IntVarP(&c.top, "number", "n", 0, "Amount of Accounts to show by the selected dimension")
 }
 
 func (c *SrvWatchAccountCmd) updateSizes() error {
@@ -95,7 +97,7 @@ func (c *SrvWatchAccountCmd) updateSizes() error {
 	return nil
 }
 
-func (c *SrvWatchAccountCmd) accountsAction(_ *fisk.ParseContext) error {
+func (c *SrvWatchAccountCmd) accountsAction(_ *cobra.Command, _ []string) error {
 	nc, _, err := prepareHelper("", natsOpts()...)
 	if err != nil {
 		return err

@@ -16,8 +16,9 @@ package cli
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/choria-io/fisk"
+
 	"github.com/nats-io/jsm.go/api"
+	"github.com/spf13/cobra"
 )
 
 type schemaReqCmd struct {
@@ -27,17 +28,25 @@ type schemaReqCmd struct {
 	dump    bool
 }
 
-func configureSchemaReqCommand(schema *fisk.CmdClause) {
+func configureSchemaReqCommand(schema *cobra.Command) {
 	c := &schemaReqCmd{}
 
-	req := schema.Command("request", "Request and validate data from a NATS service").Alias("req").Action(c.requestAction)
-	req.Arg("subject", "The subject to send a request to").Required().StringVar(&c.subject)
-	req.Arg("body", "The body to send").Default(`{}`).StringVar(&c.body)
-	req.Flag("schema", "The schema identifier to validate against").StringVar(&c.schema)
-	req.Flag("show", "Show the received data").UnNegatableBoolVar(&c.dump)
+	req := addCommand(schema, "request", "Request and validate data from a NATS service")
+	req.Aliases = []string{"req"}
+	req.RunE = c.requestAction
+	addArg(req, "subject", "The subject to send a request to", true, "string")
+	addArgWithDefault(req, "body", "The body to send", `{}`, "string")
+	req.Flags().StringVar(&c.schema, "schema", "", "The schema identifier to validate against")
+	req.Flags().BoolVar(&c.dump, "show", false, "Show the received data")
 }
 
-func (c *schemaReqCmd) requestAction(_ *fisk.ParseContext) error {
+func (c *schemaReqCmd) requestAction(_ *cobra.Command, args []string) error {
+	c.subject = args[0]
+	c.body = `{}`
+	if v := argValue(args, 1); v != "" {
+		c.body = v
+	}
+
 	nc, err := newNatsConn("", natsOpts()...)
 	if err != nil {
 		return err

@@ -23,11 +23,11 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/choria-io/fisk"
 	"github.com/fatih/color"
 	"github.com/nats-io/jsm.go/schemas"
 	"github.com/nats-io/nats-server/v2/server"
 	iu "github.com/nats-io/natscli/internal/util"
+	"github.com/spf13/cobra"
 )
 
 type errCmd struct {
@@ -40,31 +40,44 @@ type errCmd struct {
 
 func configureErrCommand(app commandHost) {
 	c := &errCmd{}
-	cmd := app.Command("errors", "Error code documentation").Alias("err").Alias("error")
-	cmd.Flag("errors", "The errors.json file to use as input").PlaceHolder("FILE").ExistingFileVar(&c.file)
+	cmd := addCommand(app, "errors", "Error code documentation")
+	cmd.Aliases = []string{"err", "error"}
+	cmd.PersistentFlags().Var(newExistingFileValue(&c.file), "errors", "The errors.json file to use as input")
+	flagPlaceholder(cmd, "errors", "FILE")
 	addCheat("errors", cmd)
 
-	ls := cmd.Command("ls", "List all known error codes").Alias("list").Action(c.listAction)
-	ls.Arg("match", "Regular expression match to limit the displayed results").StringVar(&c.match)
-	ls.Arg("sort", "Sorts by a specific field (code, http, description, d, desc)").Default("code").EnumVar(&c.sort, "code", "http", "description", "descr", "d")
-	ls.Flag("reverse", "Reverse sort").Short('R').BoolVar(&c.reverse)
+	ls := addCommand(cmd, "ls", "List all known error codes")
+	ls.Aliases = []string{"list"}
+	ls.RunE = c.listAction
+	addArg(ls, "match", "Regular expression match to limit the displayed results", false, "string")
+	addArgEnum(ls, "sort", "Sorts by a specific field (code, http, description, d, desc)", false, "code", "http", "description", "descr", "d")
+	ls.Flags().BoolVarP(&c.reverse, "reverse", "R", false, "Reverse sort")
 
-	lookup := cmd.Command("lookup", "Looks up an error by it's code").Alias("find").Alias("get").Alias("l").Alias("view").Alias("show").Action(c.lookupAction)
-	lookup.Arg("code", "The code to retrieve").Required().Uint16Var(&c.code)
+	lookup := addCommand(cmd, "lookup", "Looks up an error by it's code")
+	lookup.Aliases = []string{"find", "get", "l", "view", "show"}
+	lookup.RunE = c.lookupAction
+	addArg(lookup, "code", "The code to retrieve", true, "uint16")
 
-	edit := cmd.Command("edit", "Edit or add a error code using your EDITOR").Alias("vi").Alias("add").Alias("new").Action(c.editAction)
-	edit.Arg("file", "The file to edit").Required().ExistingFileVar(&c.file)
-	edit.Arg("code", "The code to edit").Uint16Var(&c.code)
+	edit := addCommand(cmd, "edit", "Edit or add a error code using your EDITOR")
+	edit.Aliases = []string{"vi", "add", "new"}
+	edit.RunE = c.editAction
+	addArg(edit, "file", "The file to edit", true, "path")
+	addArg(edit, "code", "The code to edit", false, "uint16")
 
-	validate := cmd.Command("validate", "Validates the validity of the errors definition").Action(c.validateAction)
-	validate.Arg("file", "The file to validate").ExistingFileVar(&c.file)
+	validate := addCommand(cmd, "validate", "Validates the validity of the errors definition")
+	validate.RunE = c.validateAction
+	addArg(validate, "file", "The file to validate", false, "path")
 }
 
 func init() {
 	registerCommand("errors", 6, configureErrCommand)
 }
 
-func (c *errCmd) validateAction(_ *fisk.ParseContext) error {
+func (c *errCmd) validateAction(_ *cobra.Command, args []string) error {
+	if v := argValue(args, 0); v != "" {
+		c.file = v
+	}
+
 	if c.file == "" {
 		return fmt.Errorf("errors file is required")
 	}
@@ -90,7 +103,13 @@ func (c *errCmd) validateAction(_ *fisk.ParseContext) error {
 	return nil
 }
 
-func (c *errCmd) listAction(_ *fisk.ParseContext) error {
+func (c *errCmd) listAction(_ *cobra.Command, args []string) error {
+	c.match = argValue(args, 0)
+	c.sort = "code"
+	if v := argValue(args, 1); v != "" {
+		c.sort = v
+	}
+
 	re := regexp.MustCompile(".")
 	if c.match != "" {
 		re = regexp.MustCompile(strings.ToLower(c.match))
@@ -121,7 +140,16 @@ func (c *errCmd) listAction(_ *fisk.ParseContext) error {
 	return nil
 }
 
-func (c *errCmd) editAction(pc *fisk.ParseContext) error {
+func (c *errCmd) editAction(cmd *cobra.Command, args []string) error {
+	c.file = args[0]
+	if v := argValue(args, 1); v != "" {
+		code, err := strconv.ParseUint(v, 10, 16)
+		if err != nil {
+			return fmt.Errorf("invalid code %q: %w", v, err)
+		}
+		c.code = uint16(code)
+	}
+
 	errs, err := c.loadErrors(nil)
 	if err != nil {
 		return err
@@ -206,10 +234,16 @@ func (c *errCmd) editAction(pc *fisk.ParseContext) error {
 		return err
 	}
 
-	return c.validateAction(pc)
+	return c.validateAction(cmd, nil)
 }
 
-func (c *errCmd) lookupAction(_ *fisk.ParseContext) error {
+func (c *errCmd) lookupAction(_ *cobra.Command, args []string) error {
+	code, err := strconv.ParseUint(args[0], 10, 16)
+	if err != nil {
+		return fmt.Errorf("invalid code %q: %w", args[0], err)
+	}
+	c.code = uint16(code)
+
 	errs, err := c.loadErrors(nil)
 	if err != nil {
 		return err

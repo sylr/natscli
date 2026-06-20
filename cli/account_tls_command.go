@@ -21,7 +21,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/choria-io/fisk"
+	"github.com/spf13/cobra"
 
 	"golang.org/x/crypto/ocsp"
 )
@@ -36,19 +36,20 @@ type ActTLSCmd struct {
 	warnIfBefore time.Time
 }
 
-func configureAccountTLSCommand(srv *fisk.CmdClause) {
+func configureAccountTLSCommand(srv *cobra.Command) {
 	c := &ActTLSCmd{}
 
-	tls := srv.Command("tls", "Report TLS chain for connected server").Action(c.showTLS)
-	tls.Tag("scope:user", "impact:ro")
-	tls.Flag("expire-warn", "Warn about certs expiring this soon, 0 to disable").Default("1w").DurationVar(&c.expireWarnDuration)
-	tls.Flag("ocsp", "Report OCSP information, if any").UnNegatableBoolVar(&c.wantOCSP)
-	tls.Flag("pem", "Show PEM Certificate blocks (true)").Default("true").BoolVar(&c.wantPEM)
+	tls := addCommand(srv, "tls", "Report TLS chain for connected server")
+	tls.RunE = c.showTLS
+	cmdAddTags(tls, "scope:user", "impact:ro")
+	tls.Flags().DurationVar(&c.expireWarnDuration, "expire-warn", 7*24*time.Hour, "Warn about certs expiring this soon, 0 to disable")
+	tls.Flags().BoolVar(&c.wantOCSP, "ocsp", false, "Report OCSP information, if any")
+	negatableBoolVar(tls, &c.wantPEM, "pem", true, "Show PEM Certificate blocks (true)")
 
 	// TODO: consider NAGIOS-compatible option (output format, exit statuses)
 }
 
-func (c *ActTLSCmd) showTLS(_ *fisk.ParseContext) error {
+func (c *ActTLSCmd) showTLS(_ *cobra.Command, _ []string) error {
 	c.now = time.Now()
 	if c.expireWarnDuration > 0 {
 		c.warnIfBefore = c.now.Add(c.expireWarnDuration)

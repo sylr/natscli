@@ -13,7 +13,7 @@ import (
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/natscli/columns"
 
-	"github.com/choria-io/fisk"
+	"github.com/spf13/cobra"
 )
 
 type srvAccountCommand struct {
@@ -24,25 +24,31 @@ type srvAccountCommand struct {
 	archivePath string
 }
 
-func configureServerAccountCommand(srv *fisk.CmdClause) {
+func configureServerAccountCommand(srv *cobra.Command) {
 	c := &srvAccountCommand{}
 
-	account := srv.Command("account", "Interact with accounts").Alias("acct")
-	account.Flag("json", "Produce JSON output").Short('j').UnNegatableBoolVar(&c.json)
+	account := addCommand(srv, "account", "Interact with accounts")
+	account.Aliases = []string{"acct"}
+	account.Flags().BoolVarP(&c.json, "json", "j", false, "Produce JSON output")
 
-	info := account.Command("info", "Shows information for an account").Alias("i").Action(c.infoAction)
-	info.Tag("scope:system", "impact:ro")
-	info.Arg("account", "The name of the account to view").Required().StringVar(&c.account)
-	info.Flag("host", "Request information from a specific server").StringVar(&c.server)
-	info.Flag("archive", "Read data from an archive file").StringVar(&c.archivePath)
+	info := addCommand(account, "info", "Shows information for an account")
+	info.Aliases = []string{"i"}
+	info.RunE = c.infoAction
+	cmdAddTags(info, "scope:system", "impact:ro")
+	addArg(info, "account", "The name of the account to view", true, "string")
+	info.Flags().StringVar(&c.server, "host", "", "Request information from a specific server")
+	info.Flags().StringVar(&c.archivePath, "archive", "", "Read data from an archive file")
 
-	purge := account.Command("purge", "Purge assets from JetStream clusters").Action(c.purgeAccount)
-	purge.Tag("scope:system", "impact:rw")
-	purge.Arg("account", "The name of the account to purge").PlaceHolder("NAME").Required().StringVar(&c.account)
-	purge.Flag("force", "Perform the operation without prompting").Short('f').UnNegatableBoolVar(&c.force)
+	purge := addCommand(account, "purge", "Purge assets from JetStream clusters")
+	purge.RunE = c.purgeAccount
+	cmdAddTags(purge, "scope:system", "impact:rw")
+	addArg(purge, "account", "The name of the account to purge", true, "string")
+	purge.Flags().BoolVarP(&c.force, "force", "f", false, "Perform the operation without prompting")
 }
 
-func (c *srvAccountCommand) purgeAccount(_ *fisk.ParseContext) error {
+func (c *srvAccountCommand) purgeAccount(_ *cobra.Command, args []string) error {
+	c.account = args[0]
+
 	if !c.force {
 		fmt.Printf("This operation deletes all data from the %s account and cannot be reversed.\n\n", c.account)
 		remove, err := askConfirmation(fmt.Sprintf("Really purge account %s", c.account), false)
@@ -85,7 +91,9 @@ func (c *srvAccountCommand) dataSource() (serverdata.Source, error) {
 	return serverdata.NewLive(nc, reqFn, 1)
 }
 
-func (c *srvAccountCommand) infoAction(_ *fisk.ParseContext) error {
+func (c *srvAccountCommand) infoAction(_ *cobra.Command, args []string) error {
+	c.account = args[0]
+
 	ds, err := c.dataSource()
 	if err != nil {
 		return err

@@ -32,7 +32,7 @@ import (
 	"github.com/AlecAivazis/survey/v2"
 	ab "github.com/synadia-io/jwt-auth-builder.go"
 
-	"github.com/choria-io/fisk"
+	"github.com/spf13/cobra"
 )
 
 type authOperatorCommand struct {
@@ -57,72 +57,97 @@ type authOperatorCommand struct {
 func configureAuthOperatorCommand(auth commandHost) {
 	c := &authOperatorCommand{}
 
-	op := auth.Command("operator", "Manage NATS Operators").Alias("o").Alias("op")
+	op := addCommand(auth, "operator", "Manage NATS Operators")
+	op.Aliases = []string{"o", "op"}
 
-	add := op.Command("add", "Adds a new Operator").Action(c.addAction)
-	add.Tag("scope:system", "impact:rw")
-	add.Arg("name", "Unique name for this Operator").StringVar(&c.operatorName)
-	add.Flag("service", "URLs for the Operator services").PlaceHolder("URL").URLListVar(&c.operatorService)
-	add.Flag("account-server", "URL for the account server").PlaceHolder("URL").URLVar(&c.accountServer)
-	add.Flag("signing-key", "Creates a signing key for this Operator").Default("true").BoolVar(&c.createSK)
-	add.Flag("tags", "Tags to assign to this Operator").StringsVar(&c.tags)
+	add := addCommand(op, "add", "Adds a new Operator")
+	add.RunE = c.addAction
+	cmdAddTags(add, "scope:system", "impact:rw")
+	addArg(add, "name", "Unique name for this Operator", false, "string")
+	add.Flags().Var(newURLListValue(&c.operatorService), "service", "URLs for the Operator services")
+	flagPlaceholder(add, "service", "URL")
+	add.Flags().Var(newURLValue(&c.accountServer), "account-server", "URL for the account server")
+	flagPlaceholder(add, "account-server", "URL")
+	negatableBoolVar(add, &c.createSK, "signing-key", true, "Creates a signing key for this Operator")
+	add.Flags().StringArrayVar(&c.tags, "tags", nil, "Tags to assign to this Operator")
 
-	info := op.Command("info", "Show Operator information").Alias("i").Alias("show").Alias("view").Action(c.infoAction)
-	info.Tag("scope:system", "impact:ro")
-	info.Arg("name", "Operator to view").StringVar(&c.operatorName)
-	info.Flag("json", "Produce JSON output").Short('j').UnNegatableBoolVar(&c.json)
+	info := addCommand(op, "info", "Show Operator information")
+	info.Aliases = []string{"i", "show", "view"}
+	info.RunE = c.infoAction
+	cmdAddTags(info, "scope:system", "impact:ro")
+	addArg(info, "name", "Operator to view", false, "string")
+	info.Flags().BoolVarP(&c.json, "json", "j", false, "Produce JSON output")
 
-	ls := op.Command("list", "List Operators").Alias("ls").Action(c.lsAction)
-	ls.Tag("scope:system", "impact:ro")
-	ls.Flag("names", "Show just the Operator names").UnNegatableBoolVar(&c.listNames)
+	ls := addCommand(op, "list", "List Operators")
+	ls.Aliases = []string{"ls"}
+	ls.RunE = c.lsAction
+	cmdAddTags(ls, "scope:system", "impact:ro")
+	ls.Flags().BoolVar(&c.listNames, "names", false, "Show just the Operator names")
 
-	edit := op.Command("edit", "Edit an Operator").Alias("update").Action(c.editAction)
-	edit.Tag("scope:system", "impact:rw")
-	edit.Arg("name", "Operator to edit").StringVar(&c.operatorName)
-	edit.Flag("account-server", "URL for the Account Server").IsSetByUser(&c.accountServerIsSet).PlaceHolder("URL").URLVar(&c.accountServer)
-	edit.Flag("service", "URLs for the Operator Services").IsSetByUser(&c.operatorServiceIsSet).PlaceHolder("URL").URLListVar(&c.operatorService)
-	edit.Flag("tags", "Tags to add to this Operator").StringsVar(&c.tags)
-	edit.Flag("no-tags", "Tags to remove from the Operator").StringsVar(&c.rmTags)
+	edit := addCommand(op, "edit", "Edit an Operator")
+	edit.Aliases = []string{"update"}
+	edit.RunE = c.editAction
+	cmdAddTags(edit, "scope:system", "impact:rw")
+	addArg(edit, "name", "Operator to edit", false, "string")
+	edit.Flags().Var(newURLValue(&c.accountServer), "account-server", "URL for the Account Server")
+	flagPlaceholder(edit, "account-server", "URL")
+	edit.Flags().Var(newURLListValue(&c.operatorService), "service", "URLs for the Operator Services")
+	flagPlaceholder(edit, "service", "URL")
+	edit.Flags().StringArrayVar(&c.tags, "tags", nil, "Tags to add to this Operator")
+	edit.Flags().StringArrayVar(&c.rmTags, "no-tags", nil, "Tags to remove from the Operator")
 
-	imp := op.Command("import", "Imports an operator").Action(c.importAction)
-	imp.Tag("scope:system", "impact:rw")
-	imp.Arg("token", "The JWT file containing the account to import").Required().PlaceHolder("JWT").ExistingFileVar(&c.tokenFile)
-	imp.Arg("key", "List of keys to import").PlaceHolder("FILE").ExistingFilesVar(&c.keyFiles)
+	imp := addCommand(op, "import", "Imports an operator")
+	imp.RunE = c.importAction
+	cmdAddTags(imp, "scope:system", "impact:rw")
+	addArg(imp, "token", "The JWT file containing the account to import", true, "string")
+	addArgCumulative(imp, "key", "List of keys to import", false, "string")
 
-	sel := op.Command("select", "Selects the default operator").Action(c.selectAction)
-	sel.Tag("scope:system", "impact:ro")
-	sel.Arg("name", "Operator to select").StringVar(&c.operatorName)
+	sel := addCommand(op, "select", "Selects the default operator")
+	sel.RunE = c.selectAction
+	cmdAddTags(sel, "scope:system", "impact:ro")
+	addArg(sel, "name", "Operator to select", false, "string")
 
-	backup := op.Command("backup", "Creates a backup of an operator").Action(c.backupAction)
-	backup.Tag("scope:system", "impact:ro")
-	backup.Arg("name", "Operator to act on").Required().StringVar(&c.operatorName)
-	backup.Arg("output", "File to write backup to").Required().StringVar(&c.outputFile)
-	backup.Flag("key", "Curve or X25519 NKey to encrypt with").StringVar(&c.encKey)
+	backup := addCommand(op, "backup", "Creates a backup of an operator")
+	backup.RunE = c.backupAction
+	cmdAddTags(backup, "scope:system", "impact:ro")
+	addArg(backup, "name", "Operator to act on", true, "string")
+	addArg(backup, "output", "File to write backup to", true, "string")
+	backup.Flags().StringVar(&c.encKey, "key", "", "Curve or X25519 NKey to encrypt with")
 
-	restore := op.Command("restore", "Restores an operator from a backup").Action(c.restoreAction)
-	restore.Tag("scope:system", "impact:rw")
-	restore.Arg("name", "Operator to act on").Required().StringVar(&c.operatorName)
-	restore.Arg("input", "File to read backup from").Required().StringVar(&c.outputFile)
-	restore.Flag("key", "Curve or X25519 NKey to decrypt with").StringVar(&c.encKey)
+	restore := addCommand(op, "restore", "Restores an operator from a backup")
+	restore.RunE = c.restoreAction
+	cmdAddTags(restore, "scope:system", "impact:rw")
+	addArg(restore, "name", "Operator to act on", true, "string")
+	addArg(restore, "input", "File to read backup from", true, "string")
+	restore.Flags().StringVar(&c.encKey, "key", "", "Curve or X25519 NKey to decrypt with")
 
-	sk := op.Command("keys", "Manage Operator Signing Keys").Alias("sk").Alias("s")
+	sk := addCommand(op, "keys", "Manage Operator Signing Keys")
+	sk.Aliases = []string{"sk", "s"}
 
-	skls := sk.Command("list", "List Signing Keys").Alias("ls").Action(c.skListAction)
-	skls.Tag("scope:system", "impact:ro")
-	skls.Arg("name", "Operator to act on").StringVar(&c.operatorName)
+	skls := addCommand(sk, "list", "List Signing Keys")
+	skls.Aliases = []string{"ls"}
+	skls.RunE = c.skListAction
+	cmdAddTags(skls, "scope:system", "impact:ro")
+	addArg(skls, "name", "Operator to act on", false, "string")
 
-	skadd := sk.Command("add", "Adds a new Signing Key").Alias("new").Alias("create").Action(c.skAddAction)
-	skadd.Tag("scope:system", "impact:rw")
-	skadd.Arg("name", "Operator to act on").StringVar(&c.operatorName)
+	skadd := addCommand(sk, "add", "Adds a new Signing Key")
+	skadd.Aliases = []string{"new", "create"}
+	skadd.RunE = c.skAddAction
+	cmdAddTags(skadd, "scope:system", "impact:rw")
+	addArg(skadd, "name", "Operator to act on", false, "string")
 
-	skrm := sk.Command("rm", "Removes a Signing Key").Alias("delete").Action(c.skRmAction)
-	skrm.Tag("scope:system", "impact:rw")
-	skrm.Arg("name", "Operator to act on").StringVar(&c.operatorName)
-	skrm.Arg("key", "The public key to remove").StringVar(&c.pubKey)
-	skrm.Flag("force", "Remove without prompting").Short('f').UnNegatableBoolVar(&c.force)
+	skrm := addCommand(sk, "rm", "Removes a Signing Key")
+	skrm.Aliases = []string{"delete"}
+	skrm.RunE = c.skRmAction
+	cmdAddTags(skrm, "scope:system", "impact:rw")
+	addArg(skrm, "name", "Operator to act on", false, "string")
+	addArg(skrm, "key", "The public key to remove", false, "string")
+	skrm.Flags().BoolVarP(&c.force, "force", "f", false, "Remove without prompting")
 }
 
-func (c *authOperatorCommand) selectAction(_ *fisk.ParseContext) error {
+func (c *authOperatorCommand) selectAction(_ *cobra.Command, args []string) error {
+	c.operatorName = argValue(args, 0)
+
 	_, oper, err := au.SelectOperator(c.operatorName, true, false)
 	if err != nil {
 		return err
@@ -154,7 +179,10 @@ func (c *authOperatorCommand) selectOperator(pick bool) (*ab.AuthImpl, ab.Operat
 	return auth, oper, err
 }
 
-func (c *authOperatorCommand) skRmAction(_ *fisk.ParseContext) error {
+func (c *authOperatorCommand) skRmAction(_ *cobra.Command, args []string) error {
+	c.operatorName = argValue(args, 0)
+	c.pubKey = argValue(args, 1)
+
 	if c.pubKey == "" {
 		return fmt.Errorf("public key is required")
 	}
@@ -194,7 +222,9 @@ func (c *authOperatorCommand) skRmAction(_ *fisk.ParseContext) error {
 	return nil
 }
 
-func (c *authOperatorCommand) skAddAction(_ *fisk.ParseContext) error {
+func (c *authOperatorCommand) skAddAction(_ *cobra.Command, args []string) error {
+	c.operatorName = argValue(args, 0)
+
 	auth, operator, err := c.selectOperator(true)
 	if err != nil {
 		return err
@@ -215,7 +245,9 @@ func (c *authOperatorCommand) skAddAction(_ *fisk.ParseContext) error {
 	return nil
 }
 
-func (c *authOperatorCommand) skListAction(_ *fisk.ParseContext) error {
+func (c *authOperatorCommand) skListAction(_ *cobra.Command, args []string) error {
+	c.operatorName = argValue(args, 0)
+
 	_, operator, err := c.selectOperator(true)
 	if err != nil {
 		return err
@@ -228,7 +260,10 @@ func (c *authOperatorCommand) skListAction(_ *fisk.ParseContext) error {
 	return nil
 }
 
-func (c *authOperatorCommand) importAction(_ *fisk.ParseContext) error {
+func (c *authOperatorCommand) importAction(_ *cobra.Command, args []string) error {
+	c.tokenFile = args[0]
+	c.keyFiles = args[1:]
+
 	auth, err := au.GetAuthBuilder()
 	if err != nil {
 		return err
@@ -274,7 +309,11 @@ func (c *authOperatorCommand) fShowOperator(w io.Writer, op ab.Operator) error {
 	return err
 }
 
-func (c *authOperatorCommand) editAction(_ *fisk.ParseContext) error {
+func (c *authOperatorCommand) editAction(cmd *cobra.Command, args []string) error {
+	c.operatorName = argValue(args, 0)
+	c.accountServerIsSet = cmd.Flags().Changed("account-server")
+	c.operatorServiceIsSet = cmd.Flags().Changed("service")
+
 	auth, operator, err := c.selectOperator(true)
 	if err != nil {
 		return err
@@ -318,7 +357,10 @@ func (c *authOperatorCommand) editAction(_ *fisk.ParseContext) error {
 
 	return c.fShowOperator(os.Stdout, operator)
 }
-func (c *authOperatorCommand) restoreAction(_ *fisk.ParseContext) error {
+func (c *authOperatorCommand) restoreAction(_ *cobra.Command, args []string) error {
+	c.operatorName = args[0]
+	c.outputFile = args[1]
+
 	auth, err := au.GetAuthBuilder()
 	if err != nil {
 		return err
@@ -385,7 +427,10 @@ func (c *authOperatorCommand) restoreAction(_ *fisk.ParseContext) error {
 	return c.fShowOperator(os.Stdout, op)
 }
 
-func (c *authOperatorCommand) backupAction(_ *fisk.ParseContext) error {
+func (c *authOperatorCommand) backupAction(_ *cobra.Command, args []string) error {
+	c.operatorName = args[0]
+	c.outputFile = args[1]
+
 	_, op, err := c.selectOperator(true)
 	if err != nil {
 		return err
@@ -441,7 +486,9 @@ func (c *authOperatorCommand) backupAction(_ *fisk.ParseContext) error {
 	return nil
 }
 
-func (c *authOperatorCommand) infoAction(_ *fisk.ParseContext) error {
+func (c *authOperatorCommand) infoAction(_ *cobra.Command, args []string) error {
+	c.operatorName = argValue(args, 0)
+
 	_, operator, err := c.selectOperator(true)
 	if err != nil {
 		return err
@@ -450,7 +497,7 @@ func (c *authOperatorCommand) infoAction(_ *fisk.ParseContext) error {
 	return c.fShowOperator(os.Stdout, operator)
 }
 
-func (c *authOperatorCommand) lsAction(_ *fisk.ParseContext) error {
+func (c *authOperatorCommand) lsAction(_ *cobra.Command, _ []string) error {
 	auth, err := au.GetAuthBuilder()
 	if err != nil {
 		return err
@@ -479,7 +526,9 @@ func (c *authOperatorCommand) lsAction(_ *fisk.ParseContext) error {
 	return nil
 }
 
-func (c *authOperatorCommand) addAction(_ *fisk.ParseContext) error {
+func (c *authOperatorCommand) addAction(_ *cobra.Command, args []string) error {
+	c.operatorName = argValue(args, 0)
+
 	if c.operatorName == "" {
 		err := iu.AskOne(&survey.Input{
 			Message: "Operator Name",

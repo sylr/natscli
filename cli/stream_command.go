@@ -47,7 +47,7 @@ import (
 	"github.com/nats-io/natscli/columns"
 	"gopkg.in/yaml.v3"
 
-	"github.com/choria-io/fisk"
+	"github.com/spf13/cobra"
 )
 
 type streamCmd struct {
@@ -197,99 +197,118 @@ type streamStat struct {
 func configureStreamCommand(app commandHost) {
 	c := &streamCmd{msgID: -1, metadata: map[string]string{}}
 
-	addCreateFlags := func(f *fisk.CmdClause, edit bool) {
-		f.Flag("subjects", "Subjects that are consumed by the stream").Default().StringsVar(&c.subjects)
-		f.Flag("description", "Sets a contextual description for the stream").StringVar(&c.description)
+	addCreateFlags := func(f *cobra.Command, edit bool) {
+		f.Flags().StringArrayVar(&c.subjects, "subjects", nil, "Subjects that are consumed by the stream")
+		f.Flags().StringVar(&c.description, "description", "", "Sets a contextual description for the stream")
 		if !edit {
-			f.Flag("storage", "Storage backend to use (file, memory)").EnumVar(&c.storage, "file", "f", "memory", "m")
+			f.Flags().Var(newEnumValue(&c.storage, "", "file", "f", "memory", "m"), "storage", "Storage backend to use (file, memory)")
 		}
-		f.Flag("compression", "Compression algorithm to use (file storage only)").IsSetByUser(&c.compressionSet).EnumVar(&c.compression, "none", "s2")
-		f.Flag("replicas", "When clustered, how many replicas of the data to create").Int64Var(&c.replicas)
-		f.Flag("tag", "Place the stream on servers that has specific tags (pass multiple times)").IsSetByUser(&c.placementTagsSet).StringsVar(&c.placementTags)
-		f.Flag("tags", "Backward compatibility only, use --tag").Hidden().IsSetByUser(&c.placementTagsSet).StringsVar(&c.placementTags)
-		f.Flag("cluster", "Place the stream on a specific cluster").IsSetByUser(&c.placementClusterSet).StringVar(&c.placementCluster)
-		f.Flag("ack", "Acknowledge publishes").Default("true").BoolVar(&c.ack)
-		f.Flag("retention", "Defines a retention policy (limits, interest, work)").EnumVar(&c.retentionPolicyS, "limits", "interest", "workq", "work")
-		f.Flag("discard", "Defines the discard policy (new, old)").EnumVar(&c.discardPolicy, "new", "old")
-		f.Flag("discard-per-subject", "Sets the 'new' discard policy and applies it to every subject in the stream").IsSetByUser(&c.discardPerSubjSet).BoolVar(&c.discardPerSubj)
+		f.Flags().Var(newEnumValue(&c.compression, "", "none", "s2"), "compression", "Compression algorithm to use (file storage only)")
+		f.Flags().Int64Var(&c.replicas, "replicas", 0, "When clustered, how many replicas of the data to create")
+		f.Flags().StringArrayVar(&c.placementTags, "tag", nil, "Place the stream on servers that has specific tags (pass multiple times)")
+		f.Flags().StringArrayVar(&c.placementTags, "tags", nil, "Backward compatibility only, use --tag")
+		_ = f.Flags().MarkHidden("tags")
+		f.Flags().StringVar(&c.placementCluster, "cluster", "", "Place the stream on a specific cluster")
+		f.Flags().BoolVar(&c.ack, "ack", true, "Acknowledge publishes")
+		f.Flags().Var(newEnumValue(&c.retentionPolicyS, "", "limits", "interest", "workq", "work"), "retention", "Defines a retention policy (limits, interest, work)")
+		f.Flags().Var(newEnumValue(&c.discardPolicy, "", "new", "old"), "discard", "Defines the discard policy (new, old)")
+		negatableBoolVar(f, &c.discardPerSubj, "discard-per-subject", false, "Sets the 'new' discard policy and applies it to every subject in the stream")
 		if !edit {
-			f.Flag("first-sequence", "Sets the starting sequence").Uint64Var(&c.firstSeq)
+			f.Flags().Uint64Var(&c.firstSeq, "first-sequence", 0, "Sets the starting sequence")
 		}
-		f.Flag("max-age", "Maximum age of messages to keep").Default("").StringVar(&c.maxAgeLimit)
-		f.Flag("max-bytes", "Maximum bytes to keep").PlaceHolder("BYTES").StringVar(&c.maxBytesLimitString)
-		f.Flag("max-consumers", "Maximum number of consumers to allow").Default("-1").IntVar(&c.maxConsumers)
-		f.Flag("max-msg-size", "Maximum size any 1 message may be").PlaceHolder("BYTES").StringVar(&c.maxMsgSizeString)
-		f.Flag("max-msgs", "Maximum amount of messages to keep").Default("0").Int64Var(&c.maxMsgLimit)
-		f.Flag("max-msgs-per-subject", "Maximum amount of messages to keep per subject").Default("0").Int64Var(&c.maxMsgPerSubjectLimit)
-		f.Flag("dupe-window", "Duration of the duplicate message tracking window").Default("").StringVar(&c.dupeWindow)
-		f.Flag("mirror", "Completely mirror another stream").StringVar(&c.mirror)
+		f.Flags().StringVar(&c.maxAgeLimit, "max-age", "", "Maximum age of messages to keep")
+		f.Flags().StringVar(&c.maxBytesLimitString, "max-bytes", "", "Maximum bytes to keep")
+		flagPlaceholder(f, "max-bytes", "BYTES")
+		f.Flags().IntVar(&c.maxConsumers, "max-consumers", -1, "Maximum number of consumers to allow")
+		f.Flags().StringVar(&c.maxMsgSizeString, "max-msg-size", "", "Maximum size any 1 message may be")
+		flagPlaceholder(f, "max-msg-size", "BYTES")
+		f.Flags().Int64Var(&c.maxMsgLimit, "max-msgs", 0, "Maximum amount of messages to keep")
+		f.Flags().Int64Var(&c.maxMsgPerSubjectLimit, "max-msgs-per-subject", 0, "Maximum amount of messages to keep per subject")
+		f.Flags().StringVar(&c.dupeWindow, "dupe-window", "", "Duration of the duplicate message tracking window")
+		f.Flags().StringVar(&c.mirror, "mirror", "", "Completely mirror another stream")
 		if edit {
-			f.Flag("no-mirror", "Removes current mirror configuration").UnNegatableBoolVar(&c.noMirror)
+			f.Flags().BoolVar(&c.noMirror, "no-mirror", false, "Removes current mirror configuration")
 		}
-		f.Flag("source", "Source data from other streams, merging into this one").PlaceHolder("STREAM").StringsVar(&c.sources)
-		f.Flag("allow-batch", "Allow atomic batch publishing").IsSetByUser(&c.allowAtomicBatchIsSet).BoolVar(&c.allowAtomicBatch)
-		f.Flag("allow-fast", "Allow fast batch publishing").IsSetByUser(&c.allowFastBatchIsSet).BoolVar(&c.allowFastBatch)
-		f.Flag("allow-counter", "Configures the stream as a distributed counter").IsSetByUser(&c.allowCounterIsSet).UnNegatableBoolVar(&c.allowCounter)
-		f.Flag("allow-rollup", "Allows roll-ups to be done by publishing messages with special headers").IsSetByUser(&c.allowRollupSet).BoolVar(&c.allowRollup)
-		f.Flag("deny-delete", "Deny messages from being deleted via the API").IsSetByUser(&c.denyDeleteSet).BoolVar(&c.denyDelete)
-		f.Flag("deny-purge", "Deny entire stream or subject purges via the API").IsSetByUser(&c.denyPurgeSet).BoolVar(&c.denyPurge)
-		f.Flag("allow-direct", "Allows fast, direct, access to stream data via the direct get API").IsSetByUser(&c.allowDirectSet).Default("true").BoolVar(&c.allowDirect)
-		f.Flag("allow-mirror-direct", "Allows fast, direct, access to stream data via the direct get API on mirrors").IsSetByUser(&c.allowMirrorDirectSet).BoolVar(&c.allowMirrorDirect)
-		f.Flag("allow-msg-ttl", "Allows per-message TTL handling").IsSetByUser(&c.allowMsgTTlSet).UnNegatableBoolVar(&c.allowMsgTTL)
-		f.Flag("allow-schedules", "Allows message schedules").IsSetByUser(&c.allowSchedulesSet).BoolVar(&c.allowSchedules)
-		f.Flag("subject-del-markers-ttl", "How long delete markers should persist in the stream").PlaceHolder("DURATION").IsSetByUser(&c.subjectDeleteMarkerTTLSet).DurationVar(&c.subjectDeleteMarkerTTL)
-		f.Flag("transform-source", "Stream subject transform source").PlaceHolder("SOURCE").StringVar(&c.subjectTransformSource)
-		f.Flag("transform-destination", "Stream subject transform destination").PlaceHolder("DEST").StringVar(&c.subjectTransformDest)
+		f.Flags().StringArrayVar(&c.sources, "source", nil, "Source data from other streams, merging into this one")
+		flagPlaceholder(f, "source", "STREAM")
+		negatableBoolVar(f, &c.allowAtomicBatch, "allow-batch", false, "Allow atomic batch publishing")
+		negatableBoolVar(f, &c.allowFastBatch, "allow-fast", false, "Allow fast batch publishing")
+		f.Flags().BoolVar(&c.allowCounter, "allow-counter", false, "Configures the stream as a distributed counter")
+		negatableBoolVar(f, &c.allowRollup, "allow-rollup", false, "Allows roll-ups to be done by publishing messages with special headers")
+		negatableBoolVar(f, &c.denyDelete, "deny-delete", false, "Deny messages from being deleted via the API")
+		negatableBoolVar(f, &c.denyPurge, "deny-purge", false, "Deny entire stream or subject purges via the API")
+		negatableBoolVar(f, &c.allowDirect, "allow-direct", true, "Allows fast, direct, access to stream data via the direct get API")
+		negatableBoolVar(f, &c.allowMirrorDirect, "allow-mirror-direct", false, "Allows fast, direct, access to stream data via the direct get API on mirrors")
+		f.Flags().BoolVar(&c.allowMsgTTL, "allow-msg-ttl", false, "Allows per-message TTL handling")
+		negatableBoolVar(f, &c.allowSchedules, "allow-schedules", false, "Allows message schedules")
+		f.Flags().DurationVar(&c.subjectDeleteMarkerTTL, "subject-del-markers-ttl", 0, "How long delete markers should persist in the stream")
+		flagPlaceholder(f, "subject-del-markers-ttl", "DURATION")
+		f.Flags().StringVar(&c.subjectTransformSource, "transform-source", "", "Stream subject transform source")
+		flagPlaceholder(f, "transform-source", "SOURCE")
+		f.Flags().StringVar(&c.subjectTransformDest, "transform-destination", "", "Stream subject transform destination")
+		flagPlaceholder(f, "transform-destination", "DEST")
 		if edit {
-			f.Flag("no-transform", "Removes current subject transform configuration").UnNegatableBoolVar(&c.noSubjectTransform)
+			f.Flags().BoolVar(&c.noSubjectTransform, "no-transform", false, "Removes current subject transform configuration")
 		}
-		f.Flag("metadata", "Adds metadata to the stream").PlaceHolder("META").IsSetByUser(&c.metadataIsSet).StringMapVar(&c.metadata)
-		f.Flag("republish-source", "Republish messages to --republish-destination").PlaceHolder("SOURCE").StringVar(&c.repubSource)
-		f.Flag("republish-destination", "Republish destination for messages in --republish-source").PlaceHolder("DEST").StringVar(&c.repubDest)
-		f.Flag("republish-headers", "Republish only message headers, no bodies").UnNegatableBoolVar(&c.repubHeadersOnly)
+		f.Flags().Var(newStringMapValue(&c.metadata), "metadata", "Adds metadata to the stream")
+		flagPlaceholder(f, "metadata", "META")
+		f.Flags().StringVar(&c.repubSource, "republish-source", "", "Republish messages to --republish-destination")
+		flagPlaceholder(f, "republish-source", "SOURCE")
+		f.Flags().StringVar(&c.repubDest, "republish-destination", "", "Republish destination for messages in --republish-source")
+		flagPlaceholder(f, "republish-destination", "DEST")
+		f.Flags().BoolVar(&c.repubHeadersOnly, "republish-headers", false, "Republish only message headers, no bodies")
 		if edit {
-			f.Flag("no-republish", "Removes current republish configuration").UnNegatableBoolVar(&c.noRepub)
+			f.Flags().BoolVar(&c.noRepub, "no-republish", false, "Removes current republish configuration")
 		}
 		if !edit {
-			f.Flag("limit-consumer-inactive", "The maximum Consumer inactive threshold the stream allows").PlaceHolder("THRESHOLD").DurationVar(&c.limitInactiveThreshold)
-			f.Flag("limit-consumer-max-pending", "The maximum Consumer Ack Pending the stream Allows").PlaceHolder("PENDING").IntVar(&c.limitMaxAckPending)
-			f.Flag("persist-mode", "Configures the persistence mode").EnumVar(&c.persistMode, "default", "async")
+			f.Flags().DurationVar(&c.limitInactiveThreshold, "limit-consumer-inactive", 0, "The maximum Consumer inactive threshold the stream allows")
+			flagPlaceholder(f, "limit-consumer-inactive", "THRESHOLD")
+			f.Flags().IntVar(&c.limitMaxAckPending, "limit-consumer-max-pending", 0, "The maximum Consumer Ack Pending the stream Allows")
+			flagPlaceholder(f, "limit-consumer-max-pending", "PENDING")
+			f.Flags().Var(newEnumValue(&c.persistMode, "", "default", "async"), "persist-mode", "Configures the persistence mode")
 		}
-		f.Flag("json", "Produce JSON output").Short('j').UnNegatableBoolVar(&c.json)
+		f.Flags().BoolVarP(&c.json, "json", "j", false, "Produce JSON output")
 
-		f.PreAction(c.parseLimitStrings)
+		f.PreRunE = c.parseLimitStrings
 	}
 
-	str := app.Command("stream", "JetStream stream management").Alias("str").Alias("st").Alias("ms").Alias("s")
-	str.Flag("all", "When listing or selecting streams show all streams including system ones").Short('a').UnNegatableBoolVar(&c.showAll)
+	str := addCommand(app, "stream", "JetStream stream management")
+	str.Aliases = []string{"str", "st", "ms", "s"}
+	negatableBoolVarP(str, &c.showAll, "all", "a", false, "When listing or selecting streams show all streams including system ones")
 	addCheat("stream", str)
 
-	strAdd := str.Command("add", "Create a new stream").Alias("create").Alias("new").Action(c.addAction)
-	strAdd.Tag("scope:user", "impact:rw")
-	strAdd.Arg("stream", "Stream name").StringVar(&c.stream)
-	strAdd.Flag("config", "JSON file to read configuration from").ExistingFileVar(&c.inputFile)
-	strAdd.Flag("validate", "Only validates the configuration against the official Schema").UnNegatableBoolVar(&c.validateOnly)
-	strAdd.Flag("output", "Save configuration instead of creating").PlaceHolder("FILE").StringVar(&c.outFile)
+	strAdd := addCommand(str, "add", "Create a new stream")
+	strAdd.Aliases = []string{"create", "new"}
+	strAdd.RunE = c.addAction
+	cmdAddTags(strAdd, "scope:user", "impact:rw")
+	addArg(strAdd, "stream", "Stream name", false, "string")
+	strAdd.Flags().Var(newExistingFileValue(&c.inputFile), "config", "JSON file to read configuration from")
+	strAdd.Flags().BoolVar(&c.validateOnly, "validate", false, "Only validates the configuration against the official Schema")
+	strAdd.Flags().StringVar(&c.outFile, "output", "", "Save configuration instead of creating")
+	flagPlaceholder(strAdd, "output", "FILE")
 	addCreateFlags(strAdd, false)
-	strAdd.Flag("defaults", "Accept default values for all prompts").UnNegatableBoolVar(&c.acceptDefaults)
+	strAdd.Flags().BoolVar(&c.acceptDefaults, "defaults", false, "Accept default values for all prompts")
 
-	strLs := str.Command("ls", "List all known streams").Alias("list").Alias("l").Action(c.lsAction)
-	strLs.Tag("scope:user", "impact:ro")
-	strLs.Flag("subject", "Limit the list to streams with matching subjects").StringVar(&c.filterSubject)
-	strLs.Flag("names", "Show just the stream names").Short('n').UnNegatableBoolVar(&c.listNames)
-	strLs.Flag("json", "Produce JSON output").Short('j').UnNegatableBoolVar(&c.json)
+	strLs := addCommand(str, "ls", "List all known streams")
+	strLs.Aliases = []string{"list", "l"}
+	strLs.RunE = c.lsAction
+	cmdAddTags(strLs, "scope:user", "impact:ro")
+	strLs.Flags().StringVar(&c.filterSubject, "subject", "", "Limit the list to streams with matching subjects")
+	negatableBoolVarP(strLs, &c.listNames, "names", "n", false, "Show just the stream names")
+	strLs.Flags().BoolVarP(&c.json, "json", "j", false, "Produce JSON output")
 
-	strReport := str.Command("report", "Reports on stream statistics").Action(c.reportAction)
-	strReport.Tag("scope:user", "impact:ro")
-	strReport.Flag("subject", "Limit the report to streams with matching subjects").StringVar(&c.filterSubject)
-	strReport.Flag("cluster", "Limit report to streams within a specific cluster").StringVar(&c.reportLimitCluster)
-	strReport.Flag("consumers", "Sort by number of Consumers").Short('o').UnNegatableBoolVar(&c.reportSortConsumers)
-	strReport.Flag("messages", "Sort by number of Messages").Short('m').UnNegatableBoolVar(&c.reportSortMsgs)
-	strReport.Flag("name", "Sort by stream name").Short('n').UnNegatableBoolVar(&c.reportSortName)
-	strReport.Flag("storage", "Sort by Storage type").Short('t').UnNegatableBoolVar(&c.reportSortStorage)
-	strReport.Flag("raw", "Show un-formatted numbers").Short('r').UnNegatableBoolVar(&c.reportRaw)
-	strReport.Flag("dot", "Produce a GraphViz graph of replication topology").StringVar(&c.outFile)
-	strReport.Flag("leaders", "Show details about cluster leaders").Short('l').UnNegatableBoolVar(&c.reportLeaderDistrib)
+	strReport := addCommand(str, "report", "Reports on stream statistics")
+	strReport.RunE = c.reportAction
+	cmdAddTags(strReport, "scope:user", "impact:ro")
+	strReport.Flags().StringVar(&c.filterSubject, "subject", "", "Limit the report to streams with matching subjects")
+	strReport.Flags().StringVar(&c.reportLimitCluster, "cluster", "", "Limit report to streams within a specific cluster")
+	negatableBoolVarP(strReport, &c.reportSortConsumers, "consumers", "o", false, "Sort by number of Consumers")
+	negatableBoolVarP(strReport, &c.reportSortMsgs, "messages", "m", false, "Sort by number of Messages")
+	negatableBoolVarP(strReport, &c.reportSortName, "name", "n", false, "Sort by stream name")
+	negatableBoolVarP(strReport, &c.reportSortStorage, "storage", "t", false, "Sort by Storage type")
+	negatableBoolVarP(strReport, &c.reportRaw, "raw", "r", false, "Show un-formatted numbers")
+	strReport.Flags().StringVar(&c.outFile, "dot", "", "Produce a GraphViz graph of replication topology")
+	negatableBoolVarP(strReport, &c.reportLeaderDistrib, "leaders", "l", false, "Show details about cluster leaders")
 
 	findHelp := `Expression format:
 
@@ -320,163 +339,206 @@ Finding streams with certain subjects configured:
 
    nats s find --expression '"js.in.orders_1" in config.subjects'
 `
-	strFind := str.Command("find", "Finds streams matching certain criteria").Alias("query").Action(c.findAction)
-	strFind.Tag("scope:user", "impact:ro")
-	strFind.HelpLong(findHelp)
-	strFind.Flag("server-name", "Display streams present on a regular expression matched server").StringVar(&c.fServer)
-	strFind.Flag("cluster", "Display streams present on a regular expression matched cluster").StringVar(&c.fCluster)
-	strFind.Flag("empty", "Display streams with no messages").UnNegatableBoolVar(&c.fEmpty)
-	strFind.Flag("idle", "Display streams with no new messages or consumer deliveries for a period").PlaceHolder("DURATION").DurationVar(&c.fIdle)
-	strFind.Flag("created", "Display streams created longer ago than duration").PlaceHolder("DURATION").DurationVar(&c.fCreated)
-	strFind.Flag("consumers", "Display streams with fewer consumers than threshold").PlaceHolder("THRESHOLD").Default("-1").IntVar(&c.fConsumers)
-	strFind.Flag("subject", "Filters streams by those with interest matching a subject or wildcard").StringVar(&c.filterSubject)
-	strFind.Flag("replicas", "Display streams with fewer or equal replicas than the value").PlaceHolder("REPLICAS").UintVar(&c.fReplicas)
-	strFind.Flag("sourced", "Display that sources data from other streams").IsSetByUser(&c.fSourcedSet).UnNegatableBoolVar(&c.fSourced)
-	strFind.Flag("mirrored", "Display that mirrors data from other streams").IsSetByUser(&c.fMirroredSet).UnNegatableBoolVar(&c.fMirrored)
-	strFind.Flag("leader", "Display only clustered streams with a specific leader").PlaceHolder("SERVER").StringVar(&c.fLeader)
-	strFind.Flag("names", "Show just the stream names").Short('n').UnNegatableBoolVar(&c.listNames)
-	strFind.Flag("invert", "Invert the check - before becomes after, with becomes without").BoolVar(&c.fInvert)
-	strFind.Flag("expression", "Match streams using an expression language").StringVar(&c.fExpression)
-	strFind.Flag("api-level", "Match streams that support at least the given api level").IntVar(&c.apiLevel)
+	strFind := addCommand(str, "find", "Finds streams matching certain criteria")
+	strFind.Aliases = []string{"query"}
+	strFind.RunE = c.findAction
+	cmdAddTags(strFind, "scope:user", "impact:ro")
+	strFind.Long = findHelp
+	strFind.Flags().StringVar(&c.fServer, "server-name", "", "Display streams present on a regular expression matched server")
+	strFind.Flags().StringVar(&c.fCluster, "cluster", "", "Display streams present on a regular expression matched cluster")
+	strFind.Flags().BoolVar(&c.fEmpty, "empty", false, "Display streams with no messages")
+	strFind.Flags().DurationVar(&c.fIdle, "idle", 0, "Display streams with no new messages or consumer deliveries for a period")
+	flagPlaceholder(strFind, "idle", "DURATION")
+	strFind.Flags().DurationVar(&c.fCreated, "created", 0, "Display streams created longer ago than duration")
+	flagPlaceholder(strFind, "created", "DURATION")
+	strFind.Flags().IntVar(&c.fConsumers, "consumers", -1, "Display streams with fewer consumers than threshold")
+	flagPlaceholder(strFind, "consumers", "THRESHOLD")
+	strFind.Flags().StringVar(&c.filterSubject, "subject", "", "Filters streams by those with interest matching a subject or wildcard")
+	strFind.Flags().UintVar(&c.fReplicas, "replicas", 0, "Display streams with fewer or equal replicas than the value")
+	flagPlaceholder(strFind, "replicas", "REPLICAS")
+	strFind.Flags().BoolVar(&c.fSourced, "sourced", false, "Display that sources data from other streams")
+	strFind.Flags().BoolVar(&c.fMirrored, "mirrored", false, "Display that mirrors data from other streams")
+	strFind.Flags().StringVar(&c.fLeader, "leader", "", "Display only clustered streams with a specific leader")
+	flagPlaceholder(strFind, "leader", "SERVER")
+	negatableBoolVarP(strFind, &c.listNames, "names", "n", false, "Show just the stream names")
+	negatableBoolVar(strFind, &c.fInvert, "invert", false, "Invert the check - before becomes after, with becomes without")
+	strFind.Flags().StringVar(&c.fExpression, "expression", "", "Match streams using an expression language")
+	strFind.Flags().IntVar(&c.apiLevel, "api-level", 0, "Match streams that support at least the given api level")
 
-	strInfo := str.Command("info", "Stream information").Alias("nfo").Alias("i").Action(c.infoAction)
-	strInfo.Tag("scope:user", "impact:ro")
-	strInfo.Arg("stream", "Stream to retrieve information for").StringVar(&c.stream)
-	strInfo.Flag("json", "Produce JSON output").Short('j').UnNegatableBoolVar(&c.json)
-	strInfo.Flag("state", "Shows only the stream state").UnNegatableBoolVar(&c.showStateOnly)
-	strInfo.Flag("no-select", "Do not select streams from a list").Default("false").UnNegatableBoolVar(&c.force)
+	strInfo := addCommand(str, "info", "Stream information")
+	strInfo.Aliases = []string{"nfo", "i"}
+	strInfo.RunE = c.infoAction
+	cmdAddTags(strInfo, "scope:user", "impact:ro")
+	addArg(strInfo, "stream", "Stream to retrieve information for", false, "string")
+	strInfo.Flags().BoolVarP(&c.json, "json", "j", false, "Produce JSON output")
+	strInfo.Flags().BoolVar(&c.showStateOnly, "state", false, "Shows only the stream state")
+	strInfo.Flags().BoolVar(&c.force, "no-select", false, "Do not select streams from a list")
 
-	strState := str.Command("state", "Stream state").Action(c.stateAction)
-	strState.Tag("scope:user", "impact:ro")
-	strState.Arg("stream", "Stream to retrieve state information for").StringVar(&c.stream)
-	strState.Flag("json", "Produce JSON output").Short('j').UnNegatableBoolVar(&c.json)
-	strState.Flag("no-select", "Do not select streams from a list").Default("false").UnNegatableBoolVar(&c.force)
+	strState := addCommand(str, "state", "Stream state")
+	strState.RunE = c.stateAction
+	cmdAddTags(strState, "scope:user", "impact:ro")
+	addArg(strState, "stream", "Stream to retrieve state information for", false, "string")
+	strState.Flags().BoolVarP(&c.json, "json", "j", false, "Produce JSON output")
+	strState.Flags().BoolVar(&c.force, "no-select", false, "Do not select streams from a list")
 
-	strSubs := str.Command("subjects", "Query subjects held in a stream").Alias("subj").Action(c.subjectsAction)
-	strSubs.Tag("scope:user", "impact:ro")
-	strSubs.Arg("stream", "Stream name").StringVar(&c.stream)
-	strSubs.Arg("filter", "Limit the subjects to those matching a filter").Default(">").StringVar(&c.filterSubject)
-	strSubs.Flag("json", "Produce JSON output").Short('j').UnNegatableBoolVar(&c.json)
-	strSubs.Flag("sort", "Adjusts the sorting order (name, messages)").Default("messages").EnumVar(&c.reportSort, "name", "subjects", "messages", "count")
-	strSubs.Flag("reverse", "Reverse sort servers").Short('R').UnNegatableBoolVar(&c.reportSortReverse)
-	strSubs.Flag("names", "List only subject names").BoolVar(&c.listNames)
+	strSubs := addCommand(str, "subjects", "Query subjects held in a stream")
+	strSubs.Aliases = []string{"subj"}
+	strSubs.RunE = c.subjectsAction
+	cmdAddTags(strSubs, "scope:user", "impact:ro")
+	addArg(strSubs, "stream", "Stream name", false, "string")
+	addArgWithDefault(strSubs, "filter", "Limit the subjects to those matching a filter", ">", "string")
+	strSubs.Flags().BoolVarP(&c.json, "json", "j", false, "Produce JSON output")
+	strSubs.Flags().Var(newEnumValue(&c.reportSort, "messages", "name", "subjects", "messages", "count"), "sort", "Adjusts the sorting order (name, messages)")
+	negatableBoolVarP(strSubs, &c.reportSortReverse, "reverse", "R", false, "Reverse sort servers")
+	negatableBoolVar(strSubs, &c.listNames, "names", false, "List only subject names")
 
-	strEdit := str.Command("edit", "Edits an existing stream").Alias("update").Action(c.editAction)
-	strEdit.Tag("scope:user", "impact:rw")
-	strEdit.Arg("stream", "Stream to retrieve edit").StringVar(&c.stream)
-	strEdit.Flag("config", "JSON file to read configuration from").ExistingFileVar(&c.inputFile)
-	strEdit.Flag("force", "Force edit without prompting").Short('f').UnNegatableBoolVar(&c.force)
-	strEdit.Flag("interactive", "Edit the configuring using your editor").Short('i').BoolVar(&c.interactive)
-	strEdit.Flag("dry-run", "Only shows differences, do not edit the stream").UnNegatableBoolVar(&c.dryRun)
+	strEdit := addCommand(str, "edit", "Edits an existing stream")
+	strEdit.Aliases = []string{"update"}
+	strEdit.RunE = c.editAction
+	cmdAddTags(strEdit, "scope:user", "impact:rw")
+	addArg(strEdit, "stream", "Stream to retrieve edit", false, "string")
+	strEdit.Flags().Var(newExistingFileValue(&c.inputFile), "config", "JSON file to read configuration from")
+	negatableBoolVarP(strEdit, &c.force, "force", "f", false, "Force edit without prompting")
+	negatableBoolVarP(strEdit, &c.interactive, "interactive", "i", false, "Edit the configuring using your editor")
+	strEdit.Flags().BoolVar(&c.dryRun, "dry-run", false, "Only shows differences, do not edit the stream")
 	addCreateFlags(strEdit, true)
 
-	strRm := str.Command("rm", "Removes a stream").Alias("delete").Alias("del").Action(c.rmAction)
-	strRm.Tag("scope:user", "impact:rw")
-	strRm.Arg("stream", "Stream name").StringVar(&c.stream)
-	strRm.Flag("force", "Force removal without prompting").Short('f').UnNegatableBoolVar(&c.force)
+	strRm := addCommand(str, "rm", "Removes a stream")
+	strRm.Aliases = []string{"delete", "del"}
+	strRm.RunE = c.rmAction
+	cmdAddTags(strRm, "scope:user", "impact:rw")
+	addArg(strRm, "stream", "Stream name", false, "string")
+	negatableBoolVarP(strRm, &c.force, "force", "f", false, "Force removal without prompting")
 
-	strPurge := str.Command("purge", "Bulk removes messages from a stream").Action(c.purgeAction)
-	strPurge.Tag("scope:user", "impact:rw")
-	strPurge.Arg("stream", "Stream name").StringVar(&c.stream)
-	strPurge.Flag("json", "Produce JSON output").Short('j').UnNegatableBoolVar(&c.json)
-	strPurge.Flag("force", "Force removal without prompting").Short('f').UnNegatableBoolVar(&c.force)
-	strPurge.Flag("subject", "Limits the purge to a specific subject").PlaceHolder("SUBJECT").StringVar(&c.purgeSubject)
-	strPurge.Flag("seq", "Purge up to but not including a specific message sequence").PlaceHolder("SEQUENCE").Uint64Var(&c.purgeSequence)
-	strPurge.Flag("keep", "Keeps a certain number of messages after the purge").PlaceHolder("MESSAGES").Uint64Var(&c.purgeKeep)
+	strPurge := addCommand(str, "purge", "Bulk removes messages from a stream")
+	strPurge.RunE = c.purgeAction
+	cmdAddTags(strPurge, "scope:user", "impact:rw")
+	addArg(strPurge, "stream", "Stream name", false, "string")
+	strPurge.Flags().BoolVarP(&c.json, "json", "j", false, "Produce JSON output")
+	negatableBoolVarP(strPurge, &c.force, "force", "f", false, "Force removal without prompting")
+	strPurge.Flags().StringVar(&c.purgeSubject, "subject", "", "Limits the purge to a specific subject")
+	flagPlaceholder(strPurge, "subject", "SUBJECT")
+	strPurge.Flags().Uint64Var(&c.purgeSequence, "seq", 0, "Purge up to but not including a specific message sequence")
+	flagPlaceholder(strPurge, "seq", "SEQUENCE")
+	strPurge.Flags().Uint64Var(&c.purgeKeep, "keep", 0, "Keeps a certain number of messages after the purge")
+	flagPlaceholder(strPurge, "keep", "MESSAGES")
 
-	strCopy := str.Command("copy", "Creates a new stream based on the configuration of another, does not copy data").Alias("cp").Action(c.cpAction)
-	strCopy.Tag("scope:user", "impact:rw")
-	strCopy.Arg("source", "Source stream to copy").Required().StringVar(&c.stream)
-	strCopy.Arg("destination", "New stream to create").Required().StringVar(&c.destination)
+	strCopy := addCommand(str, "copy", "Creates a new stream based on the configuration of another, does not copy data")
+	strCopy.Aliases = []string{"cp"}
+	strCopy.RunE = c.cpAction
+	cmdAddTags(strCopy, "scope:user", "impact:rw")
+	addArg(strCopy, "source", "Source stream to copy", true, "string")
+	addArg(strCopy, "destination", "New stream to create", true, "string")
 	addCreateFlags(strCopy, false)
 
-	strRmMsg := str.Command("rmm", "Securely removes an individual message from a stream").Action(c.rmMsgAction)
-	strRmMsg.Tag("scope:user", "impact:rw")
-	strRmMsg.Arg("stream", "Stream name").StringVar(&c.stream)
-	strRmMsg.Arg("id", "Message Sequence to remove").Int64Var(&c.msgID)
-	strRmMsg.Flag("force", "Force removal without prompting").Short('f').UnNegatableBoolVar(&c.force)
+	strRmMsg := addCommand(str, "rmm", "Securely removes an individual message from a stream")
+	strRmMsg.RunE = c.rmMsgAction
+	cmdAddTags(strRmMsg, "scope:user", "impact:rw")
+	addArg(strRmMsg, "stream", "Stream name", false, "string")
+	addArg(strRmMsg, "id", "Message Sequence to remove", false, "int")
+	negatableBoolVarP(strRmMsg, &c.force, "force", "f", false, "Force removal without prompting")
 
-	strView := str.Command("view", "View messages in a stream").Action(c.viewAction)
-	strView.Tag("scope:user", "impact:ro")
-	strView.Arg("stream", "Stream name").StringVar(&c.stream)
-	strView.Arg("size", "Page size <= 25").Default("10").IntVar(&c.vwPageSize)
-	strView.Flag("id", "Start at a specific message Sequence").IntVar(&c.vwStartId)
-	strView.Flag("since", "Delivers messages received since a duration like 1d3h5m2s").DurationVar(&c.vwStartDelta)
-	strView.Flag("raw", "Show the raw data received").UnNegatableBoolVar(&c.vwRaw)
-	strView.Flag("translate", "Translate the message data by running it through the given command before output").StringVar(&c.vwTranslate)
-	strView.Flag("subject", "Filter the stream using a subject").StringVar(&c.vwSubject)
+	strView := addCommand(str, "view", "View messages in a stream")
+	strView.RunE = c.viewAction
+	cmdAddTags(strView, "scope:user", "impact:ro")
+	addArg(strView, "stream", "Stream name", false, "string")
+	addArgWithDefault(strView, "size", "Page size <= 25", "10", "int")
+	strView.Flags().IntVar(&c.vwStartId, "id", 0, "Start at a specific message Sequence")
+	strView.Flags().DurationVar(&c.vwStartDelta, "since", 0, "Delivers messages received since a duration like 1d3h5m2s")
+	strView.Flags().BoolVar(&c.vwRaw, "raw", false, "Show the raw data received")
+	strView.Flags().StringVar(&c.vwTranslate, "translate", "", "Translate the message data by running it through the given command before output")
+	strView.Flags().StringVar(&c.vwSubject, "subject", "", "Filter the stream using a subject")
 
-	strGet := str.Command("get", "Retrieves a specific message from a Stream").Action(c.getAction)
-	strGet.Tag("scope:user", "impact:ro")
-	strGet.Arg("stream", "Stream name").StringVar(&c.stream)
-	strGet.Arg("id", "Message Sequence to retrieve").Int64Var(&c.msgID)
-	strGet.Flag("last-for", "Retrieves the message for a specific subject").Short('S').PlaceHolder("SUBJECT").StringVar(&c.filterSubject)
-	strGet.Flag("json", "Produce JSON output").Short('j').UnNegatableBoolVar(&c.json)
-	strGet.Flag("translate", "Translate the message data by running it through the given command before output").StringVar(&c.vwTranslate)
+	strGet := addCommand(str, "get", "Retrieves a specific message from a Stream")
+	strGet.RunE = c.getAction
+	cmdAddTags(strGet, "scope:user", "impact:ro")
+	addArg(strGet, "stream", "Stream name", false, "string")
+	addArg(strGet, "id", "Message Sequence to retrieve", false, "int")
+	strGet.Flags().StringVarP(&c.filterSubject, "last-for", "S", "", "Retrieves the message for a specific subject")
+	flagPlaceholder(strGet, "last-for", "SUBJECT")
+	strGet.Flags().BoolVarP(&c.json, "json", "j", false, "Produce JSON output")
+	strGet.Flags().StringVar(&c.vwTranslate, "translate", "", "Translate the message data by running it through the given command before output")
 
-	strBackup := str.Command("backup", "Creates a backup of a stream over the NATS network").Alias("snapshot").Action(c.backupAction)
-	strBackup.Tag("scope:user", "impact:ro")
-	strBackup.Arg("stream", "Stream to backup").Required().StringVar(&c.stream)
-	strBackup.Arg("target", "Directory to create the backup in").Required().StringVar(&c.backupDirectory)
-	strBackup.Flag("progress", "Enables or disables progress reporting using a progress bar").Default("true").BoolVar(&c.showProgress)
-	strBackup.Flag("check", "Checks the stream for health prior to backup").UnNegatableBoolVar(&c.healthCheck)
-	strBackup.Flag("consumers", "Enable or disable consumer backups").Default("true").BoolVar(&c.snapShotConsumers)
-	strBackup.Flag("chunk-size", "Sets a specific chunk size that the server will send").StringVar(&c.chunkSize)
-	strBackup.Flag("window-size", "Sets a specific window size that the server will send").StringVar(&c.wndSize)
+	strBackup := addCommand(str, "backup", "Creates a backup of a stream over the NATS network")
+	strBackup.Aliases = []string{"snapshot"}
+	strBackup.RunE = c.backupAction
+	cmdAddTags(strBackup, "scope:user", "impact:ro")
+	addArg(strBackup, "stream", "Stream to backup", true, "string")
+	addArg(strBackup, "target", "Directory to create the backup in", true, "string")
+	negatableBoolVar(strBackup, &c.showProgress, "progress", true, "Enables or disables progress reporting using a progress bar")
+	strBackup.Flags().BoolVar(&c.healthCheck, "check", false, "Checks the stream for health prior to backup")
+	negatableBoolVar(strBackup, &c.snapShotConsumers, "consumers", true, "Enable or disable consumer backups")
+	strBackup.Flags().StringVar(&c.chunkSize, "chunk-size", "", "Sets a specific chunk size that the server will send")
+	strBackup.Flags().StringVar(&c.wndSize, "window-size", "", "Sets a specific window size that the server will send")
 
-	strRestore := str.Command("restore", "Restore a stream over the NATS network").Action(c.restoreAction)
-	strRestore.Tag("scope:user", "impact:rw")
-	strRestore.Arg("file", "The directory holding the backup to restore").Required().ExistingDirVar(&c.backupDirectory)
-	strRestore.Flag("progress", "Enables or disables progress reporting using a progress bar").Default("true").BoolVar(&c.showProgress)
-	strRestore.Flag("config", "Load a different configuration when restoring the stream").ExistingFileVar(&c.inputFile)
-	strRestore.Flag("cluster", "Place the stream in a specific cluster").StringVar(&c.placementCluster)
-	strRestore.Flag("tag", "Place the stream on servers that has specific tags (pass multiple times)").StringsVar(&c.placementTags)
-	strRestore.Flag("replicas", "Override how many replicas of the data to create").Int64Var(&c.replicas)
+	strRestore := addCommand(str, "restore", "Restore a stream over the NATS network")
+	strRestore.RunE = c.restoreAction
+	cmdAddTags(strRestore, "scope:user", "impact:rw")
+	addArg(strRestore, "file", "The directory holding the backup to restore", true, "path")
+	negatableBoolVar(strRestore, &c.showProgress, "progress", true, "Enables or disables progress reporting using a progress bar")
+	strRestore.Flags().Var(newExistingFileValue(&c.inputFile), "config", "Load a different configuration when restoring the stream")
+	strRestore.Flags().StringVar(&c.placementCluster, "cluster", "", "Place the stream in a specific cluster")
+	strRestore.Flags().StringArrayVar(&c.placementTags, "tag", nil, "Place the stream on servers that has specific tags (pass multiple times)")
+	strRestore.Flags().Int64Var(&c.replicas, "replicas", 0, "Override how many replicas of the data to create")
 
-	strSeal := str.Command("seal", "Seals a stream preventing further updates").Action(c.sealAction)
-	strSeal.Tag("scope:user", "impact:rw")
-	strSeal.Arg("stream", "The name of the stream to seal").Required().StringVar(&c.stream)
-	strSeal.Flag("force", "Force sealing without prompting").Short('f').UnNegatableBoolVar(&c.force)
+	strSeal := addCommand(str, "seal", "Seals a stream preventing further updates")
+	strSeal.RunE = c.sealAction
+	cmdAddTags(strSeal, "scope:user", "impact:rw")
+	addArg(strSeal, "stream", "The name of the stream to seal", true, "string")
+	negatableBoolVarP(strSeal, &c.force, "force", "f", false, "Force sealing without prompting")
 
-	gapDetect := str.Command("gaps", "Detect gaps in the stream content that would be reported as deleted messages").Action(c.detectGaps)
-	gapDetect.Tag("scope:user", "impact:ro")
-	gapDetect.Arg("stream", "Stream to act on").StringVar(&c.stream)
-	gapDetect.Flag("force", "Act without prompting").Short('f').UnNegatableBoolVar(&c.force)
-	gapDetect.Flag("progress", "Enable progress bar").Default("true").BoolVar(&c.showProgress)
-	gapDetect.Flag("json", "Show detected gaps in JSON format").UnNegatableBoolVar(&c.json)
+	gapDetect := addCommand(str, "gaps", "Detect gaps in the stream content that would be reported as deleted messages")
+	gapDetect.RunE = c.detectGaps
+	cmdAddTags(gapDetect, "scope:user", "impact:ro")
+	addArg(gapDetect, "stream", "Stream to act on", false, "string")
+	negatableBoolVarP(gapDetect, &c.force, "force", "f", false, "Act without prompting")
+	negatableBoolVar(gapDetect, &c.showProgress, "progress", true, "Enable progress bar")
+	gapDetect.Flags().BoolVar(&c.json, "json", false, "Show detected gaps in JSON format")
 
-	graph := str.Command("graph", "View a graph of stream activity").Action(c.graphAction)
-	graph.Tag("scope:user", "impact:ro")
-	graph.Arg("stream", "The name of the stream to graph").StringVar(&c.stream)
+	graph := addCommand(str, "graph", "View a graph of stream activity")
+	graph.RunE = c.graphAction
+	cmdAddTags(graph, "scope:user", "impact:ro")
+	addArg(graph, "stream", "The name of the stream to graph", false, "string")
 
-	strCluster := str.Command("cluster", "Manages a clustered stream").Alias("c")
-	strClusterDown := strCluster.Command("step-down", "Force a new leader election by standing down the current leader").Alias("stepdown").Alias("sd").Alias("elect").Alias("down").Alias("d").Action(c.leaderStandDown)
-	strClusterDown.Tag("scope:user", "impact:rw")
-	strClusterDown.Arg("stream", "Stream to act on").StringVar(&c.stream)
-	strClusterDown.Flag("preferred", "Prefer placing the leader on a specific host").StringVar(&c.placementPreferred)
-	strClusterDown.Flag("force", "Force leader step down ignoring current leader").Short('f').UnNegatableBoolVar(&c.force)
+	strCluster := addCommand(str, "cluster", "Manages a clustered stream")
+	strCluster.Aliases = []string{"c"}
+	strClusterDown := addCommand(strCluster, "step-down", "Force a new leader election by standing down the current leader")
+	strClusterDown.Aliases = []string{"stepdown", "sd", "elect", "down", "d"}
+	strClusterDown.RunE = c.leaderStandDown
+	cmdAddTags(strClusterDown, "scope:user", "impact:rw")
+	addArg(strClusterDown, "stream", "Stream to act on", false, "string")
+	strClusterDown.Flags().StringVar(&c.placementPreferred, "preferred", "", "Prefer placing the leader on a specific host")
+	negatableBoolVarP(strClusterDown, &c.force, "force", "f", false, "Force leader step down ignoring current leader")
 
-	strClusterBalance := strCluster.Command("balance", "Balance stream leaders").Action(c.balanceAction)
-	strClusterBalance.Tag("scope:user", "impact:rw")
-	strClusterBalance.Flag("server-name", "Balance streams present on a regular expression matched server").StringVar(&c.fServer)
-	strClusterBalance.Flag("cluster", "Balance streams present on a regular expression matched cluster").StringVar(&c.fCluster)
-	strClusterBalance.Flag("empty", "Balance streams with no messages").UnNegatableBoolVar(&c.fEmpty)
-	strClusterBalance.Flag("idle", "Balance streams with no new messages or consumer deliveries for a period").PlaceHolder("DURATION").DurationVar(&c.fIdle)
-	strClusterBalance.Flag("created", "Balance streams created longer ago than duration").PlaceHolder("DURATION").DurationVar(&c.fCreated)
-	strClusterBalance.Flag("consumers", "Balance streams with fewer consumers than threshold").PlaceHolder("THRESHOLD").Default("-1").IntVar(&c.fConsumers)
-	strClusterBalance.Flag("subject", "Filters streams by those with interest matching a subject or wildcard and balances them").StringVar(&c.filterSubject)
-	strClusterBalance.Flag("replicas", "Balance streams with fewer or equal replicas than the value").PlaceHolder("REPLICAS").UintVar(&c.fReplicas)
-	strClusterBalance.Flag("sourced", "Balance that sources data from other streams").IsSetByUser(&c.fSourcedSet).UnNegatableBoolVar(&c.fSourced)
-	strClusterBalance.Flag("mirrored", "Balance that mirrors data from other streams").IsSetByUser(&c.fMirroredSet).UnNegatableBoolVar(&c.fMirrored)
-	strClusterBalance.Flag("leader", "Balance only clustered streams with a specific leader").PlaceHolder("SERVER").StringVar(&c.fLeader)
-	strClusterBalance.Flag("invert", "Invert the check - before becomes after, with becomes without").BoolVar(&c.fInvert)
-	strClusterBalance.Flag("expression", "Balance matching streams using an expression language").StringVar(&c.fExpression)
+	strClusterBalance := addCommand(strCluster, "balance", "Balance stream leaders")
+	strClusterBalance.RunE = c.balanceAction
+	cmdAddTags(strClusterBalance, "scope:user", "impact:rw")
+	strClusterBalance.Flags().StringVar(&c.fServer, "server-name", "", "Balance streams present on a regular expression matched server")
+	strClusterBalance.Flags().StringVar(&c.fCluster, "cluster", "", "Balance streams present on a regular expression matched cluster")
+	strClusterBalance.Flags().BoolVar(&c.fEmpty, "empty", false, "Balance streams with no messages")
+	strClusterBalance.Flags().DurationVar(&c.fIdle, "idle", 0, "Balance streams with no new messages or consumer deliveries for a period")
+	flagPlaceholder(strClusterBalance, "idle", "DURATION")
+	strClusterBalance.Flags().DurationVar(&c.fCreated, "created", 0, "Balance streams created longer ago than duration")
+	flagPlaceholder(strClusterBalance, "created", "DURATION")
+	strClusterBalance.Flags().IntVar(&c.fConsumers, "consumers", -1, "Balance streams with fewer consumers than threshold")
+	flagPlaceholder(strClusterBalance, "consumers", "THRESHOLD")
+	strClusterBalance.Flags().StringVar(&c.filterSubject, "subject", "", "Filters streams by those with interest matching a subject or wildcard and balances them")
+	strClusterBalance.Flags().UintVar(&c.fReplicas, "replicas", 0, "Balance streams with fewer or equal replicas than the value")
+	flagPlaceholder(strClusterBalance, "replicas", "REPLICAS")
+	strClusterBalance.Flags().BoolVar(&c.fSourced, "sourced", false, "Balance that sources data from other streams")
+	strClusterBalance.Flags().BoolVar(&c.fMirrored, "mirrored", false, "Balance that mirrors data from other streams")
+	strClusterBalance.Flags().StringVar(&c.fLeader, "leader", "", "Balance only clustered streams with a specific leader")
+	flagPlaceholder(strClusterBalance, "leader", "SERVER")
+	negatableBoolVar(strClusterBalance, &c.fInvert, "invert", false, "Invert the check - before becomes after, with becomes without")
+	strClusterBalance.Flags().StringVar(&c.fExpression, "expression", "", "Balance matching streams using an expression language")
 
-	strClusterRemovePeer := strCluster.Command("peer-remove", "Removes a peer from the stream cluster").Alias("pr").Action(c.removePeer)
-	strClusterRemovePeer.Tag("scope:user", "impact:rw")
-	strClusterRemovePeer.Arg("stream", "The stream to act on").StringVar(&c.stream)
-	strClusterRemovePeer.Arg("peer", "The name of the peer to remove").StringVar(&c.peerName)
-	strClusterRemovePeer.Flag("force", "Force sealing without prompting").Short('f').UnNegatableBoolVar(&c.force)
+	strClusterRemovePeer := addCommand(strCluster, "peer-remove", "Removes a peer from the stream cluster")
+	strClusterRemovePeer.Aliases = []string{"pr"}
+	strClusterRemovePeer.RunE = c.removePeer
+	cmdAddTags(strClusterRemovePeer, "scope:user", "impact:rw")
+	addArg(strClusterRemovePeer, "stream", "The stream to act on", false, "string")
+	addArg(strClusterRemovePeer, "peer", "The name of the peer to remove", false, "string")
+	negatableBoolVarP(strClusterRemovePeer, &c.force, "force", "f", false, "Force sealing without prompting")
 }
 
 func init() {
@@ -505,7 +567,9 @@ func (c *streamCmd) kvAbstractionWarn(stream string, prompt string) error {
 	return nil
 }
 
-func (c *streamCmd) graphAction(_ *fisk.ParseContext) error {
+func (c *streamCmd) graphAction(_ *cobra.Command, args []string) error {
+	c.stream = argValue(args, 0)
+
 	if !iu.IsTerminal() {
 		return fmt.Errorf("can only graph data on an interactive terminal")
 	}
@@ -636,7 +700,9 @@ func (c *streamCmd) graphAction(_ *fisk.ParseContext) error {
 	}
 }
 
-func (c *streamCmd) detectGaps(_ *fisk.ParseContext) error {
+func (c *streamCmd) detectGaps(_ *cobra.Command, args []string) error {
+	c.stream = argValue(args, 0)
+
 	c.connectAndAskStream()
 
 	stream, err := c.loadStream(c.stream)
@@ -662,7 +728,7 @@ func (c *streamCmd) detectGaps(_ *fisk.ParseContext) error {
 		fmt.Println("WARNING: Detecting gaps in a stream consumes the entire stream and can be resource intensive on the Server, Client and Network.")
 		fmt.Println()
 		ok, err := askConfirmation(fmt.Sprintf("Really detect gaps in stream %s with %s messages and %s bytes", c.stream, humanize.Comma(int64(info.State.Msgs)), humanize.IBytes(info.State.Bytes)), false)
-		fisk.FatalIfError(err, "could not obtain confirmation")
+		fatalIfError(err, "could not obtain confirmation")
 
 		if !ok {
 			return nil
@@ -738,7 +804,13 @@ func (c *streamCmd) detectGaps(_ *fisk.ParseContext) error {
 	return nil
 }
 
-func (c *streamCmd) subjectsAction(_ *fisk.ParseContext) (err error) {
+func (c *streamCmd) subjectsAction(_ *cobra.Command, args []string) (err error) {
+	c.stream = argValue(args, 0)
+	c.filterSubject = ">"
+	if v := argValue(args, 1); v != "" {
+		c.filterSubject = v
+	}
+
 	asked := c.connectAndAskStream()
 
 	subs, err := c.mgr.StreamContainedSubjects(c.stream, c.filterSubject)
@@ -826,7 +898,7 @@ func (c *streamCmd) subjectsAction(_ *fisk.ParseContext) (err error) {
 	return nil
 }
 
-func (c *streamCmd) parseLimitStrings(_ *fisk.ParseContext) (err error) {
+func (c *streamCmd) parseLimitStrings(_ *cobra.Command, _ []string) (err error) {
 	if c.maxBytesLimitString != "" {
 		c.maxBytesLimit, err = iu.ParseStringAsBytes(c.maxBytesLimitString, 32)
 		if err != nil {
@@ -844,7 +916,31 @@ func (c *streamCmd) parseLimitStrings(_ *fisk.ParseContext) (err error) {
 	return nil
 }
 
-func (c *streamCmd) findAction(_ *fisk.ParseContext) (err error) {
+// setCreateFlagsState populates the IsSetByUser tracking booleans for the flags
+// registered by addCreateFlags, based on whether the user provided them.
+func (c *streamCmd) setCreateFlagsState(cmd *cobra.Command) {
+	c.compressionSet = cmd.Flags().Changed("compression")
+	c.placementTagsSet = cmd.Flags().Changed("tag") || cmd.Flags().Changed("tags")
+	c.placementClusterSet = cmd.Flags().Changed("cluster")
+	c.discardPerSubjSet = cmd.Flags().Changed("discard-per-subject")
+	c.allowAtomicBatchIsSet = cmd.Flags().Changed("allow-batch")
+	c.allowFastBatchIsSet = cmd.Flags().Changed("allow-fast")
+	c.allowCounterIsSet = cmd.Flags().Changed("allow-counter")
+	c.allowRollupSet = cmd.Flags().Changed("allow-rollup")
+	c.denyDeleteSet = cmd.Flags().Changed("deny-delete")
+	c.denyPurgeSet = cmd.Flags().Changed("deny-purge")
+	c.allowDirectSet = cmd.Flags().Changed("allow-direct")
+	c.allowMirrorDirectSet = cmd.Flags().Changed("allow-mirror-direct")
+	c.allowMsgTTlSet = cmd.Flags().Changed("allow-msg-ttl")
+	c.allowSchedulesSet = cmd.Flags().Changed("allow-schedules")
+	c.subjectDeleteMarkerTTLSet = cmd.Flags().Changed("subject-del-markers-ttl")
+	c.metadataIsSet = cmd.Flags().Changed("metadata")
+}
+
+func (c *streamCmd) findAction(cmd *cobra.Command, _ []string) (err error) {
+	c.fSourcedSet = cmd.Flags().Changed("sourced")
+	c.fMirroredSet = cmd.Flags().Changed("mirrored")
+
 	c.nc, c.mgr, err = prepareHelper("", natsOpts()...)
 	if err != nil {
 		return fmt.Errorf("setup failed: %v", err)
@@ -923,8 +1019,11 @@ func (c *streamCmd) loadStream(stream string) (*jsm.Stream, error) {
 	return c.mgr.LoadStream(stream)
 }
 
-func (c *streamCmd) balanceAction(_ *fisk.ParseContext) error {
+func (c *streamCmd) balanceAction(cmd *cobra.Command, _ []string) error {
 	var err error
+
+	c.fSourcedSet = cmd.Flags().Changed("sourced")
+	c.fMirroredSet = cmd.Flags().Changed("mirrored")
 
 	c.nc, c.mgr, err = prepareHelper("", natsOpts()...)
 	if err != nil {
@@ -994,7 +1093,9 @@ func (c *streamCmd) balanceAction(_ *fisk.ParseContext) error {
 	return nil
 }
 
-func (c *streamCmd) leaderStandDown(_ *fisk.ParseContext) error {
+func (c *streamCmd) leaderStandDown(_ *cobra.Command, args []string) error {
+	c.stream = argValue(args, 0)
+
 	c.connectAndAskStream()
 
 	stream, err := c.loadStream(c.stream)
@@ -1067,7 +1168,10 @@ func (c *streamCmd) leaderStandDown(_ *fisk.ParseContext) error {
 	return c.showStream(stream)
 }
 
-func (c *streamCmd) removePeer(_ *fisk.ParseContext) error {
+func (c *streamCmd) removePeer(_ *cobra.Command, args []string) error {
+	c.stream = argValue(args, 0)
+	c.peerName = argValue(args, 1)
+
 	c.connectAndAskStream()
 
 	stream, err := c.loadStream(c.stream)
@@ -1115,7 +1219,17 @@ func (c *streamCmd) removePeer(_ *fisk.ParseContext) error {
 	return nil
 }
 
-func (c *streamCmd) viewAction(_ *fisk.ParseContext) error {
+func (c *streamCmd) viewAction(_ *cobra.Command, args []string) error {
+	c.stream = argValue(args, 0)
+	c.vwPageSize = 10
+	if v := argValue(args, 1); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			return fmt.Errorf("invalid page size %q: %w", v, err)
+		}
+		c.vwPageSize = n
+	}
+
 	if !iu.IsTerminal() {
 		return fmt.Errorf("interactive stream paging requires a valid terminal")
 	}
@@ -1226,12 +1340,14 @@ func (c *streamCmd) viewAction(_ *fisk.ParseContext) error {
 	}
 }
 
-func (c *streamCmd) sealAction(_ *fisk.ParseContext) error {
+func (c *streamCmd) sealAction(_ *cobra.Command, args []string) error {
+	c.stream = args[0]
+
 	c.connectAndAskStream()
 
 	if !c.force {
 		ok, err := askConfirmation(fmt.Sprintf("Really seal Stream %s, sealed streams can not be unsealed or modified", c.stream), false)
-		fisk.FatalIfError(err, "could not obtain confirmation")
+		fatalIfError(err, "could not obtain confirmation")
 
 		if !ok {
 			return nil
@@ -1239,30 +1355,36 @@ func (c *streamCmd) sealAction(_ *fisk.ParseContext) error {
 	}
 
 	stream, err := c.loadStream(c.stream)
-	fisk.FatalIfError(err, "could not seal Stream")
+	fatalIfError(err, "could not seal Stream")
 
 	stream.Seal()
-	fisk.FatalIfError(err, "could not seal Stream")
+	fatalIfError(err, "could not seal Stream")
 
 	return c.showStream(stream)
 }
 
-func (c *streamCmd) restoreAction(_ *fisk.ParseContext) error {
+func (c *streamCmd) restoreAction(_ *cobra.Command, args []string) error {
+	// Called both as a command (positional directory arg) and internally by
+	// account restore which pre-sets backupDirectory and passes no args.
+	if len(args) > 0 {
+		c.backupDirectory = args[0]
+	}
+
 	_, mgr, err := prepareHelper("", natsOpts()...)
-	fisk.FatalIfError(err, "setup failed")
+	fatalIfError(err, "setup failed")
 
 	var bm api.JSApiStreamRestoreRequest
 	bmj, err := os.ReadFile(filepath.Join(c.backupDirectory, "backup.json"))
-	fisk.FatalIfError(err, "restore failed")
+	fatalIfError(err, "restore failed")
 	err = json.Unmarshal(bmj, &bm)
-	fisk.FatalIfError(err, "restore failed")
+	fatalIfError(err, "restore failed")
 
 	var cfg *api.StreamConfig
 
 	known, err := mgr.IsKnownStream(bm.Config.Name)
-	fisk.FatalIfError(err, "Could not check if the stream already exist")
+	fatalIfError(err, "Could not check if the stream already exist")
 	if known {
-		fisk.Fatalf("Stream %q already exist", bm.Config.Name)
+		fatalf("Stream %q already exist", bm.Config.Name)
 	}
 
 	var progbar progress.Writer
@@ -1329,7 +1451,7 @@ func (c *streamCmd) restoreAction(_ *fisk.ParseContext) error {
 	fmt.Printf("Starting restore of Stream %q from file %q\n\n", bm.Config.Name, c.backupDirectory)
 
 	fp, _, err := mgr.RestoreSnapshotFromDirectory(ctx, bm.Config.Name, c.backupDirectory, ropts...)
-	fisk.FatalIfError(err, "restore failed")
+	fatalIfError(err, "restore failed")
 	if c.showProgress {
 		tracker.SetValue(int64(fp.ChunksSent() * uint32(fp.ChunkSize())))
 		time.Sleep(300 * time.Millisecond)
@@ -1341,9 +1463,9 @@ func (c *streamCmd) restoreAction(_ *fisk.ParseContext) error {
 	fmt.Println()
 
 	stream, err := mgr.LoadStream(bm.Config.Name)
-	fisk.FatalIfError(err, "could not request Stream info")
+	fatalIfError(err, "could not request Stream info")
 	err = c.showStream(stream)
-	fisk.FatalIfError(err, "could not show stream")
+	fatalIfError(err, "could not show stream")
 
 	return nil
 }
@@ -1462,11 +1584,14 @@ func backupStream(stream *jsm.Stream, showProgress bool, consumers bool, check b
 	return nil
 }
 
-func (c *streamCmd) backupAction(_ *fisk.ParseContext) error {
+func (c *streamCmd) backupAction(_ *cobra.Command, args []string) error {
+	c.stream = args[0]
+	c.backupDirectory = args[1]
+
 	var err error
 
 	c.nc, c.mgr, err = prepareHelper("", natsOpts()...)
-	fisk.FatalIfError(err, "setup failed")
+	fatalIfError(err, "setup failed")
 
 	stream, err := c.loadStream(c.stream)
 	if err != nil {
@@ -1487,14 +1612,14 @@ func (c *streamCmd) backupAction(_ *fisk.ParseContext) error {
 	}
 
 	err = backupStream(stream, c.showProgress, c.snapShotConsumers, c.healthCheck, c.backupDirectory, int(chunkSize), int(wndSize))
-	fisk.FatalIfError(err, "snapshot failed")
+	fatalIfError(err, "snapshot failed")
 
 	return nil
 }
 
-func (c *streamCmd) reportAction(_ *fisk.ParseContext) error {
+func (c *streamCmd) reportAction(_ *cobra.Command, _ []string) error {
 	_, mgr, err := prepareHelper("", natsOpts()...)
-	fisk.FatalIfError(err, "setup failed")
+	fatalIfError(err, "setup failed")
 
 	if !c.json {
 		fmt.Print("Obtaining Stream stats\n\n")
@@ -1514,7 +1639,7 @@ func (c *streamCmd) reportAction(_ *fisk.ParseContext) error {
 
 	missing, offline, err := mgr.EachStream(filter, func(stream *jsm.Stream) {
 		info, err := stream.LatestInformation()
-		fisk.FatalIfError(err, "could not get stream info for %s", stream.Name())
+		fatalIfError(err, "could not get stream info for %s", stream.Name())
 
 		if info.Cluster != nil {
 			if c.reportLimitCluster != "" && info.Cluster.Name != c.reportLimitCluster {
@@ -1782,7 +1907,7 @@ func (c *streamCmd) checkRepubTransform() {
 			msg = msg + " when using --headers-only"
 		}
 
-		fisk.Fatalf(msg)
+		fatalf(msg)
 	}
 
 	if (c.subjectTransformSource != "" && c.subjectTransformDest == "") || (c.subjectTransformSource == "" && c.subjectTransformDest != "") {
@@ -1792,11 +1917,11 @@ func (c *streamCmd) checkRepubTransform() {
 			msg = msg + " when using --headers-only"
 		}
 
-		fisk.Fatalf(msg)
+		fatalf(msg)
 	}
 }
 
-func (c *streamCmd) copyAndEditStream(cfg api.StreamConfig, pc *fisk.ParseContext) (api.StreamConfig, error) {
+func (c *streamCmd) copyAndEditStream(cfg api.StreamConfig) (api.StreamConfig, error) {
 	var err error
 
 	if c.inputFile != "" {
@@ -1845,7 +1970,7 @@ func (c *streamCmd) copyAndEditStream(cfg api.StreamConfig, pc *fisk.ParseContex
 	}
 
 	if c.maxAgeLimit != "" {
-		cfg.MaxAge, err = fisk.ParseDuration(c.maxAgeLimit)
+		cfg.MaxAge, err = parseDuration(c.maxAgeLimit)
 		if err != nil {
 			return api.StreamConfig{}, fmt.Errorf("invalid maximum age limit format: %v", err)
 		}
@@ -1860,7 +1985,7 @@ func (c *streamCmd) copyAndEditStream(cfg api.StreamConfig, pc *fisk.ParseContex
 	}
 
 	if c.dupeWindow != "" {
-		dw, err := fisk.ParseDuration(c.dupeWindow)
+		dw, err := parseDuration(c.dupeWindow)
 		if err != nil {
 			return api.StreamConfig{}, fmt.Errorf("invalid duplicate window: %v", err)
 		}
@@ -2040,11 +2165,14 @@ func (c *streamCmd) interactiveEdit(cfg api.StreamConfig) (api.StreamConfig, err
 	return ncfg, nil
 }
 
-func (c *streamCmd) editAction(pc *fisk.ParseContext) error {
+func (c *streamCmd) editAction(cmd *cobra.Command, args []string) error {
+	c.stream = argValue(args, 0)
+	c.setCreateFlagsState(cmd)
+
 	c.connectAndAskStream()
 
 	sourceStream, err := c.loadStream(c.stream)
-	fisk.FatalIfError(err, "could not request Stream %s configuration", c.stream)
+	fatalIfError(err, "could not request Stream %s configuration", c.stream)
 
 	// lazy deep copy
 	input := sourceStream.Configuration()
@@ -2062,10 +2190,10 @@ func (c *streamCmd) editAction(pc *fisk.ParseContext) error {
 
 	if c.interactive {
 		cfg, err = c.interactiveEdit(cfg)
-		fisk.FatalIfError(err, "could not create new configuration for Stream %s", c.stream)
+		fatalIfError(err, "could not create new configuration for Stream %s", c.stream)
 	} else {
-		cfg, err = c.copyAndEditStream(cfg, pc)
-		fisk.FatalIfError(err, "could not create new configuration for Stream %s", c.stream)
+		cfg, err = c.copyAndEditStream(cfg)
+		fatalIfError(err, "could not create new configuration for Stream %s", c.stream)
 	}
 
 	// sorts strings to subject lists that only differ in ordering is considered equal
@@ -2098,7 +2226,7 @@ func (c *streamCmd) editAction(pc *fisk.ParseContext) error {
 
 	if !c.force {
 		ok, err := askConfirmation(fmt.Sprintf("Really edit Stream %s", c.stream), false)
-		fisk.FatalIfError(err, "could not obtain confirmation")
+		fatalIfError(err, "could not obtain confirmation")
 
 		if !ok {
 			return nil
@@ -2113,7 +2241,7 @@ func (c *streamCmd) editAction(pc *fisk.ParseContext) error {
 	}
 
 	err = sourceStream.UpdateConfiguration(cfg)
-	fisk.FatalIfError(err, "could not edit Stream %s", c.stream)
+	fatalIfError(err, "could not edit Stream %s", c.stream)
 
 	if !c.json {
 		fmt.Printf("Stream %s was updated\n\n", c.stream)
@@ -2122,15 +2250,19 @@ func (c *streamCmd) editAction(pc *fisk.ParseContext) error {
 	return c.showStream(sourceStream)
 }
 
-func (c *streamCmd) cpAction(pc *fisk.ParseContext) error {
+func (c *streamCmd) cpAction(cmd *cobra.Command, args []string) error {
+	c.stream = args[0]
+	c.destination = args[1]
+	c.setCreateFlagsState(cmd)
+
 	if c.stream == c.destination {
-		fisk.Fatalf("source and destination Stream names cannot be the same")
+		fatalf("source and destination Stream names cannot be the same")
 	}
 
 	c.connectAndAskStream()
 
 	sourceStream, err := c.loadStream(c.stream)
-	fisk.FatalIfError(err, "could not request Stream %s configuration", c.stream)
+	fatalIfError(err, "could not request Stream %s configuration", c.stream)
 
 	// lazy deep copy
 	input := sourceStream.Configuration()
@@ -2144,13 +2276,13 @@ func (c *streamCmd) cpAction(pc *fisk.ParseContext) error {
 		return err
 	}
 
-	cfg, err = c.copyAndEditStream(cfg, pc)
-	fisk.FatalIfError(err, "could not copy Stream %s", c.stream)
+	cfg, err = c.copyAndEditStream(cfg)
+	fatalIfError(err, "could not copy Stream %s", c.stream)
 
 	cfg.Name = c.destination
 
 	newStream, err := c.mgr.NewStreamFromDefault(cfg.Name, cfg)
-	fisk.FatalIfError(err, "could not create Stream")
+	fatalIfError(err, "could not create Stream")
 
 	if !c.json {
 		fmt.Printf("Stream %s was created\n\n", cfg.Name)
@@ -2332,7 +2464,7 @@ func (c *streamCmd) showStream(stream *jsm.Stream) error {
 func (c *streamCmd) showStreamInfo(info *api.StreamInfo) {
 	if c.json {
 		err := iu.PrintJSON(info)
-		fisk.FatalIfError(err, "could not display info")
+		fatalIfError(err, "could not display info")
 		return
 	}
 
@@ -2513,18 +2645,20 @@ func (c *streamCmd) showStreamInfo(info *api.StreamInfo) {
 	cols.Frender(os.Stdout)
 }
 
-func (c *streamCmd) stateAction(pc *fisk.ParseContext) error {
+func (c *streamCmd) stateAction(cmd *cobra.Command, args []string) error {
 	c.showStateOnly = true
-	return c.infoAction(pc)
+	return c.infoAction(cmd, args)
 }
 
-func (c *streamCmd) infoAction(_ *fisk.ParseContext) error {
+func (c *streamCmd) infoAction(_ *cobra.Command, args []string) error {
+	c.stream = argValue(args, 0)
+
 	c.connectAndAskStream()
 
 	stream, err := c.loadStream(c.stream)
-	fisk.FatalIfError(err, "could not request Stream info")
+	fatalIfError(err, "could not request Stream info")
 	err = c.showStream(stream)
-	fisk.FatalIfError(err, "could not show stream")
+	fatalIfError(err, "could not show stream")
 
 	fmt.Println()
 
@@ -2538,7 +2672,7 @@ func (c *streamCmd) discardPolicyFromString() api.DiscardPolicy {
 	case "old":
 		return api.DiscardOld
 	default:
-		fisk.Fatalf("invalid discard policy %s", c.discardPolicy)
+		fatalf("invalid discard policy %s", c.discardPolicy)
 		return api.DiscardOld // unreachable
 	}
 }
@@ -2550,7 +2684,7 @@ func (c *streamCmd) storeTypeFromString(s string) api.StorageType {
 	case "memory", "m":
 		return api.MemoryStorage
 	default:
-		fisk.Fatalf("invalid storage type %s", c.storage)
+		fatalf("invalid storage type %s", c.storage)
 		return api.MemoryStorage // unreachable
 	}
 }
@@ -2564,17 +2698,17 @@ func (c *streamCmd) retentionPolicyFromString() api.RetentionPolicy {
 	case "work queue", "workq", "work":
 		return api.WorkQueuePolicy
 	default:
-		fisk.Fatalf("invalid retention policy %s", c.retentionPolicyS)
+		fatalf("invalid retention policy %s", c.retentionPolicyS)
 		return api.LimitsPolicy // unreachable
 	}
 }
 
-func (c *streamCmd) prepareConfig(_ *fisk.ParseContext, requireSize bool) api.StreamConfig {
+func (c *streamCmd) prepareConfig(requireSize bool) api.StreamConfig {
 	var err error
 
 	if c.inputFile != "" {
 		cfg, err := c.loadConfigFile(c.inputFile)
-		fisk.FatalIfError(err, "invalid input")
+		fatalIfError(err, "invalid input")
 
 		cfg.Metadata = iu.RemoveReservedMetadata(cfg.Metadata)
 
@@ -2619,7 +2753,7 @@ func (c *streamCmd) prepareConfig(_ *fisk.ParseContext, requireSize bool) api.St
 		err = iu.AskOne(&survey.Input{
 			Message: "Stream Name",
 		}, &c.stream, survey.WithValidator(survey.Required))
-		fisk.FatalIfError(err, "invalid input")
+		fatalIfError(err, "invalid input")
 	}
 
 	if c.mirror == "" && len(c.sources) == 0 {
@@ -2629,7 +2763,7 @@ func (c *streamCmd) prepareConfig(_ *fisk.ParseContext, requireSize bool) api.St
 				Message: "Subjects",
 				Help:    "Streams consume messages from subjects, this is a space or comma separated list that can include wildcards. Settable using --subjects",
 			}, &subjects, survey.WithValidator(survey.Required))
-			fisk.FatalIfError(err, "invalid input")
+			fatalIfError(err, "invalid input")
 
 			c.subjects = iu.SplitString(subjects)
 		}
@@ -2638,7 +2772,7 @@ func (c *streamCmd) prepareConfig(_ *fisk.ParseContext, requireSize bool) api.St
 	}
 
 	if c.mirror != "" && len(c.subjects) > 0 {
-		fisk.Fatalf("mirrors cannot listen for messages on subjects")
+		fatalf("mirrors cannot listen for messages on subjects")
 	}
 
 	if c.acceptDefaults {
@@ -2683,21 +2817,21 @@ func (c *streamCmd) prepareConfig(_ *fisk.ParseContext, requireSize bool) api.St
 			Options: []string{"file", "memory"},
 			Help:    "Streams are stored on the server, this can be one of many backends and all are usable in clustering mode. Settable using --storage",
 		}, &c.storage, survey.WithValidator(survey.Required))
-		fisk.FatalIfError(err, "invalid input")
+		fatalIfError(err, "invalid input")
 	}
 
 	storage := c.storeTypeFromString(c.storage)
 
 	var compression api.Compression
 	err = compression.UnmarshalJSON([]byte(fmt.Sprintf("%q", c.compression)))
-	fisk.FatalIfError(err, "invalid compression algorithm")
+	fatalIfError(err, "invalid compression algorithm")
 
 	if c.replicas == 0 {
 		c.replicas, err = askOneInt("Replication", "1", "When clustered, defines how many replicas of the data to store.  Settable using --replicas")
-		fisk.FatalIfError(err, "invalid input")
+		fatalIfError(err, "invalid input")
 	}
 	if c.replicas <= 0 {
-		fisk.Fatalf("replicas should be >= 1")
+		fatalf("replicas should be >= 1")
 	}
 
 	if c.retentionPolicyS == "" {
@@ -2707,7 +2841,7 @@ func (c *streamCmd) prepareConfig(_ *fisk.ParseContext, requireSize bool) api.St
 			Help:    "Messages are retained either based on limits like size and age (Limits), as long as there are Consumers (Interest) or until any worker processed them (Work Queue)",
 			Default: "Limits",
 		}, &c.retentionPolicyS, survey.WithValidator(survey.Required))
-		fisk.FatalIfError(err, "invalid input")
+		fatalIfError(err, "invalid input")
 	}
 
 	if c.discardPolicy == "" {
@@ -2717,12 +2851,12 @@ func (c *streamCmd) prepareConfig(_ *fisk.ParseContext, requireSize bool) api.St
 			Help:    "Once the Stream reaches its limits of size or messages, the New policy will prevent further messages from being added while Old will delete old messages.",
 			Default: "Old",
 		}, &c.discardPolicy, survey.WithValidator(survey.Required))
-		fisk.FatalIfError(err, "invalid input")
+		fatalIfError(err, "invalid input")
 	}
 
 	if c.maxMsgLimit == 0 {
 		c.maxMsgLimit, err = askOneInt("Stream Messages Limit", "-1", "Defines the amount of messages to keep in the store for this Stream, when exceeded oldest messages are removed, -1 for unlimited. Settable using --max-msgs")
-		fisk.FatalIfError(err, "invalid input")
+		fatalIfError(err, "invalid input")
 		if c.maxMsgLimit <= 0 {
 			c.maxMsgLimit = -1
 		}
@@ -2730,7 +2864,7 @@ func (c *streamCmd) prepareConfig(_ *fisk.ParseContext, requireSize bool) api.St
 
 	if c.maxMsgPerSubjectLimit == 0 && len(c.subjects) > 0 && (len(c.subjects) > 0 || strings.Contains(c.subjects[0], "*") || strings.Contains(c.subjects[0], ">")) {
 		c.maxMsgPerSubjectLimit, err = askOneInt("Per Subject Messages Limit", "-1", "Defines the amount of messages to keep in the store for this Stream per unique subject, when exceeded oldest messages are removed, -1 for unlimited. Settable using --max-msgs-per-subject")
-		fisk.FatalIfError(err, "invalid input")
+		fatalIfError(err, "invalid input")
 		if c.maxMsgPerSubjectLimit <= 0 {
 			c.maxMsgPerSubjectLimit = -1
 		}
@@ -2747,7 +2881,7 @@ func (c *streamCmd) prepareConfig(_ *fisk.ParseContext, requireSize bool) api.St
 		}
 
 		c.maxBytesLimit, err = askOneBytes("Total Stream Size", defltSize, "Defines the combined size of all messages in a Stream, when exceeded messages are removed or new ones are rejected, -1 for unlimited. Settable using --max-bytes", reqd)
-		fisk.FatalIfError(err, "invalid input")
+		fatalIfError(err, "invalid input")
 	}
 
 	if c.maxBytesLimit <= 0 {
@@ -2760,17 +2894,17 @@ func (c *streamCmd) prepareConfig(_ *fisk.ParseContext, requireSize bool) api.St
 			Default: "-1",
 			Help:    "Defines the oldest messages that can be stored in the Stream, any messages older than this period will be removed, -1 for unlimited. Supports units (s)econds, (m)inutes, (h)ours, (y)ears, (M)onths, (d)ays. Settable using --max-age",
 		}, &c.maxAgeLimit)
-		fisk.FatalIfError(err, "invalid input")
+		fatalIfError(err, "invalid input")
 	}
 
 	if c.maxAgeLimit != "-1" {
-		maxAge, err = fisk.ParseDuration(c.maxAgeLimit)
-		fisk.FatalIfError(err, "invalid maximum age limit format")
+		maxAge, err = parseDuration(c.maxAgeLimit)
+		fatalIfError(err, "invalid maximum age limit format")
 	}
 
 	if c.maxMsgSize == 0 {
 		c.maxMsgSize, err = askOneBytes("Max Message Size", "-1", "Defines the maximum size any single message may be to be accepted by the Stream. Settable using --max-msg-size", "")
-		fisk.FatalIfError(err, "invalid input")
+		fatalIfError(err, "invalid input")
 	}
 
 	if c.maxMsgSize == 0 {
@@ -2778,7 +2912,7 @@ func (c *streamCmd) prepareConfig(_ *fisk.ParseContext, requireSize bool) api.St
 	}
 
 	if c.maxMsgSize > math.MaxInt32 {
-		fisk.Fatalf("max value size %s is too big maximum is %s", f(c.maxMsgSize), f(math.MaxInt32))
+		fatalf("max value size %s is too big maximum is %s", f(c.maxMsgSize), f(math.MaxInt32))
 	}
 
 	var dupeWindow time.Duration
@@ -2797,30 +2931,30 @@ func (c *streamCmd) prepareConfig(_ *fisk.ParseContext, requireSize bool) api.St
 				Default: defaultDW,
 				Help:    "Duplicate messages are identified by the Msg-Id headers and tracked within a window of this size. Supports units (s)econds, (m)inutes, (h)ours, (y)ears, (M)onths, (d)ays. Settable using --dupe-window",
 			}, &c.dupeWindow)
-			fisk.FatalIfError(err, "invalid input")
+			fatalIfError(err, "invalid input")
 		}
 	}
 
 	if c.dupeWindow != "" {
-		dupeWindow, err = fisk.ParseDuration(c.dupeWindow)
-		fisk.FatalIfError(err, "invalid duplicate window format")
+		dupeWindow, err = parseDuration(c.dupeWindow)
+		fatalIfError(err, "invalid duplicate window format")
 	}
 
 	if !c.acceptDefaults {
 		if !c.allowRollupSet {
 			c.allowRollup, err = askConfirmation("Allow message Roll-ups", false)
-			fisk.FatalIfError(err, "invalid input")
+			fatalIfError(err, "invalid input")
 		}
 
 		if !c.denyDeleteSet {
 			allow, err := askConfirmation("Allow message deletion", true)
-			fisk.FatalIfError(err, "invalid input")
+			fatalIfError(err, "invalid input")
 			c.denyDelete = !allow
 		}
 
 		if !c.denyPurgeSet {
 			allow, err := askConfirmation("Allow purging subjects or the entire stream", true)
-			fisk.FatalIfError(err, "invalid input")
+			fatalIfError(err, "invalid input")
 			c.denyPurge = !allow
 		}
 	}
@@ -2879,7 +3013,7 @@ func (c *streamCmd) prepareConfig(_ *fisk.ParseContext, requireSize bool) api.St
 	if c.mirror != "" {
 		if iu.IsJsonObjectString(c.mirror) {
 			cfg.Mirror, err = c.parseStreamSource(c.mirror)
-			fisk.FatalIfError(err, "invalid mirror")
+			fatalIfError(err, "invalid mirror")
 		} else {
 			cfg.Mirror = c.askMirror()
 		}
@@ -2888,7 +3022,7 @@ func (c *streamCmd) prepareConfig(_ *fisk.ParseContext, requireSize bool) api.St
 	for _, source := range c.sources {
 		if iu.IsJsonObjectString(source) {
 			ss, err := c.parseStreamSource(source)
-			fisk.FatalIfError(err, "invalid source")
+			fatalIfError(err, "invalid source")
 			cfg.Sources = append(cfg.Sources, ss)
 		} else {
 			ss := c.askSource(source, fmt.Sprintf("%s Source", source))
@@ -2930,7 +3064,7 @@ func (c *streamCmd) askMirror() *api.StreamSource {
 	}
 
 	askDurable, err := askConfirmation("Configure a custom durable consumer", false)
-	fisk.FatalIfError(err, "Could not request mirror details")
+	fatalIfError(err, "Could not request mirror details")
 	if askDurable {
 		mirror.Consumer = &api.StreamConsumerSource{}
 
@@ -2938,21 +3072,21 @@ func (c *streamCmd) askMirror() *api.StreamSource {
 			Message: "Durable consumer name",
 			Help:    "The name of the durable to read messages from",
 		}, &mirror.Consumer.Name, survey.WithValidator(survey.Required))
-		fisk.FatalIfError(err, "Could not request mirror details")
+		fatalIfError(err, "Could not request mirror details")
 
 		err = iu.AskOne(&survey.Input{
 			Message: "Delivery subject",
 			Help:    "The delivery subject for the consumer",
 		}, &mirror.Consumer.DeliverSubject, survey.WithValidator(survey.Required))
-		fisk.FatalIfError(err, "Could not request mirror details")
+		fatalIfError(err, "Could not request mirror details")
 	}
 
 	if !askDurable {
 		ok, err := askConfirmation("Adjust mirror start", false)
-		fisk.FatalIfError(err, "Could not request mirror details")
+		fatalIfError(err, "Could not request mirror details")
 		if ok {
 			a, err := askOneInt("Mirror Start Sequence", "0", "Start mirroring at a specific sequence")
-			fisk.FatalIfError(err, "Invalid sequence")
+			fatalIfError(err, "Invalid sequence")
 			mirror.OptStartSeq = uint64(a)
 
 			if mirror.OptStartSeq == 0 {
@@ -2961,10 +3095,10 @@ func (c *streamCmd) askMirror() *api.StreamSource {
 					Message: "Mirror Start Time (YYYY:MM:DD HH:MM:SS)",
 					Help:    "Start replicating as a specific time stamp in UTC time",
 				}, &ts)
-				fisk.FatalIfError(err, "could not request start time")
+				fatalIfError(err, "could not request start time")
 				if ts != "" {
 					t, err := time.Parse("2006:01:02 15:04:05", ts)
-					fisk.FatalIfError(err, "invalid time format")
+					fatalIfError(err, "invalid time format")
 					mirror.OptStartTime = &t
 				}
 			}
@@ -2972,7 +3106,7 @@ func (c *streamCmd) askMirror() *api.StreamSource {
 	}
 
 	ok, err := askConfirmation("Adjust mirror filter and transform", false)
-	fisk.FatalIfError(err, "Could not request mirror details")
+	fatalIfError(err, "Could not request mirror details")
 
 	if ok {
 		var sources []string
@@ -2986,7 +3120,7 @@ func (c *streamCmd) askMirror() *api.StreamSource {
 				Message: "Filter mirror by subject (hit enter to finish)",
 				Help:    "Only replicate data matching this subject",
 			}, &source)
-			fisk.FatalIfError(err, "could not request filter")
+			fatalIfError(err, "could not request filter")
 
 			if source == "" {
 				break
@@ -2996,7 +3130,7 @@ func (c *streamCmd) askMirror() *api.StreamSource {
 				Message: "Subject transform destination",
 				Help:    "Transform the subjects using this destination (hit enter for no transformation)",
 			}, &destination)
-			fisk.FatalIfError(err, "could not request transform destination")
+			fatalIfError(err, "could not request transform destination")
 
 			sources = append(sources, source)
 			destinations = append(destinations, destination)
@@ -3011,7 +3145,7 @@ func (c *streamCmd) askMirror() *api.StreamSource {
 	}
 
 	ok, err = askConfirmation("Import mirror from a different JetStream domain", false)
-	fisk.FatalIfError(err, "Could not request mirror details")
+	fatalIfError(err, "Could not request mirror details")
 	if ok {
 		mirror.External = &api.ExternalStream{}
 		domainName := ""
@@ -3019,7 +3153,7 @@ func (c *streamCmd) askMirror() *api.StreamSource {
 			Message: "Foreign JetStream domain name",
 			Help:    "The domain name from where to import the JetStream API",
 		}, &domainName, survey.WithValidator(survey.Required))
-		fisk.FatalIfError(err, "Could not request mirror details")
+		fatalIfError(err, "Could not request mirror details")
 		mirror.External.ApiPrefix = fmt.Sprintf("$JS.%s.API", domainName)
 
 		if !askDurable {
@@ -3027,11 +3161,11 @@ func (c *streamCmd) askMirror() *api.StreamSource {
 				Message: "Delivery prefix",
 				Help:    "Optional prefix of the delivery subject",
 			}, &mirror.External.DeliverPrefix)
-			fisk.FatalIfError(err, "Could not request mirror details")
+			fatalIfError(err, "Could not request mirror details")
 		}
 	} else {
 		ok, err = askConfirmation("Import mirror from a different account", false)
-		fisk.FatalIfError(err, "Could not request mirror details")
+		fatalIfError(err, "Could not request mirror details")
 
 		if ok {
 			mirror.External = &api.ExternalStream{}
@@ -3039,14 +3173,14 @@ func (c *streamCmd) askMirror() *api.StreamSource {
 				Message: "Foreign account API prefix",
 				Help:    "The prefix where the foreign account JetStream API has been imported",
 			}, &mirror.External.ApiPrefix, survey.WithValidator(survey.Required))
-			fisk.FatalIfError(err, "Could not request mirror details")
+			fatalIfError(err, "Could not request mirror details")
 
 			if !askDurable {
 				err = iu.AskOne(&survey.Input{
 					Message: "Foreign account delivery prefix",
 					Help:    "The prefix where the foreign account JetStream delivery subjects has been imported",
 				}, &mirror.External.DeliverPrefix, survey.WithValidator(survey.Required))
-				fisk.FatalIfError(err, "Could not request mirror details")
+				fatalIfError(err, "Could not request mirror details")
 			}
 		}
 	}
@@ -3062,7 +3196,7 @@ func (c *streamCmd) askSource(name string, prefix string) *api.StreamSource {
 	}
 
 	askDurable, err := askConfirmation(fmt.Sprintf("Configure a custom durable consumer for %q", name), false)
-	fisk.FatalIfError(err, "Could not request source details")
+	fatalIfError(err, "Could not request source details")
 	if askDurable {
 		cfg.Consumer = &api.StreamConsumerSource{}
 
@@ -3070,21 +3204,21 @@ func (c *streamCmd) askSource(name string, prefix string) *api.StreamSource {
 			Message: "Durable consumer name",
 			Help:    "The name of the durable to read messages from",
 		}, &cfg.Consumer.Name, survey.WithValidator(survey.Required))
-		fisk.FatalIfError(err, "Could not request source details")
+		fatalIfError(err, "Could not request source details")
 
 		err = iu.AskOne(&survey.Input{
 			Message: "Delivery subject",
 			Help:    "The delivery subject for the consumer",
 		}, &cfg.Consumer.DeliverSubject, survey.WithValidator(survey.Required))
-		fisk.FatalIfError(err, "Could not request source details")
+		fatalIfError(err, "Could not request source details")
 	}
 
 	if !askDurable {
 		ok, err := askConfirmation(fmt.Sprintf("Adjust source %q start", name), false)
-		fisk.FatalIfError(err, "Could not request source details")
+		fatalIfError(err, "Could not request source details")
 		if ok {
 			a, err := askOneInt(fmt.Sprintf("%s Start Sequence", prefix), "0", "Start mirroring at a specific sequence")
-			fisk.FatalIfError(err, "Invalid sequence")
+			fatalIfError(err, "Invalid sequence")
 			cfg.OptStartSeq = uint64(a)
 
 			ts := ""
@@ -3092,17 +3226,17 @@ func (c *streamCmd) askSource(name string, prefix string) *api.StreamSource {
 				Message: fmt.Sprintf("%s UTC Time Stamp (YYYY:MM:DD HH:MM:SS)", prefix),
 				Help:    "Start replicating as a specific time stamp",
 			}, &ts)
-			fisk.FatalIfError(err, "could not request start time")
+			fatalIfError(err, "could not request start time")
 			if ts != "" {
 				t, err := time.Parse("2006:01:02 15:04:05", ts)
-				fisk.FatalIfError(err, "invalid time format")
+				fatalIfError(err, "invalid time format")
 				cfg.OptStartTime = &t
 			}
 		}
 	}
 
 	ok, err := askConfirmation(fmt.Sprintf("Adjust source %q filter and transform", name), false)
-	fisk.FatalIfError(err, "Could not request source details")
+	fatalIfError(err, "Could not request source details")
 	if ok {
 		var sources []string
 		var destinations []string
@@ -3114,7 +3248,7 @@ func (c *streamCmd) askSource(name string, prefix string) *api.StreamSource {
 				Message: "Filter source by subject (hit enter to finish)",
 				Help:    "Only replicate data matching this subject",
 			}, &source)
-			fisk.FatalIfError(err, "could not request filter")
+			fatalIfError(err, "could not request filter")
 
 			if source == "" {
 				break
@@ -3124,7 +3258,7 @@ func (c *streamCmd) askSource(name string, prefix string) *api.StreamSource {
 				Message: "Subject transform destination",
 				Help:    "Transform the subjects using this destination (hit enter for no transformation)",
 			}, &destination)
-			fisk.FatalIfError(err, "could not request transform destination")
+			fatalIfError(err, "could not request transform destination")
 
 			sources = append(sources, source)
 			destinations = append(destinations, destination)
@@ -3139,7 +3273,7 @@ func (c *streamCmd) askSource(name string, prefix string) *api.StreamSource {
 	}
 
 	ok, err = askConfirmation(fmt.Sprintf("Import %q from a different JetStream domain", name), false)
-	fisk.FatalIfError(err, "Could not request source details")
+	fatalIfError(err, "Could not request source details")
 	if ok {
 		cfg.External = &api.ExternalStream{}
 		domainName := ""
@@ -3147,7 +3281,7 @@ func (c *streamCmd) askSource(name string, prefix string) *api.StreamSource {
 			Message: fmt.Sprintf("%s foreign JetStream domain name", prefix),
 			Help:    "The domain name from where to import the JetStream API",
 		}, &domainName, survey.WithValidator(survey.Required))
-		fisk.FatalIfError(err, "Could not request source details")
+		fatalIfError(err, "Could not request source details")
 		cfg.External.ApiPrefix = fmt.Sprintf("$JS.%s.API", domainName)
 
 		if !askDurable {
@@ -3155,11 +3289,11 @@ func (c *streamCmd) askSource(name string, prefix string) *api.StreamSource {
 				Message: fmt.Sprintf("%s foreign JetStream domain delivery prefix", prefix),
 				Help:    "Optional prefix of the delivery subject",
 			}, &cfg.External.DeliverPrefix)
-			fisk.FatalIfError(err, "Could not request source details")
+			fatalIfError(err, "Could not request source details")
 		}
 	} else {
 		ok, err = askConfirmation(fmt.Sprintf("Import %q from a different account", name), false)
-		fisk.FatalIfError(err, "Could not request source details")
+		fatalIfError(err, "Could not request source details")
 		if !ok {
 			return cfg
 		}
@@ -3169,14 +3303,14 @@ func (c *streamCmd) askSource(name string, prefix string) *api.StreamSource {
 			Message: fmt.Sprintf("%s foreign account API prefix", prefix),
 			Help:    "The prefix where the foreign account JetStream API has been imported",
 		}, &cfg.External.ApiPrefix, survey.WithValidator(survey.Required))
-		fisk.FatalIfError(err, "Could not request source details")
+		fatalIfError(err, "Could not request source details")
 
 		if !askDurable {
 			err = iu.AskOne(&survey.Input{
 				Message: fmt.Sprintf("%s foreign account delivery prefix", prefix),
 				Help:    "The prefix where the foreign account JetStream delivery subjects has been imported",
 			}, &cfg.External.DeliverPrefix, survey.WithValidator(survey.Required))
-			fisk.FatalIfError(err, "Could not request source details")
+			fatalIfError(err, "Could not request source details")
 		}
 	}
 	return cfg
@@ -3224,13 +3358,16 @@ func (c *streamCmd) validateCfg(cfg *api.StreamConfig) (bool, []byte, []string, 
 	return valid, j, errs, nil
 }
 
-func (c *streamCmd) addAction(pc *fisk.ParseContext) (err error) {
+func (c *streamCmd) addAction(cmd *cobra.Command, args []string) (err error) {
+	c.stream = argValue(args, 0)
+	c.setCreateFlagsState(cmd)
+
 	_, mgr, err := prepareHelper("", natsOpts()...)
-	fisk.FatalIfError(err, "could not create Stream")
+	fatalIfError(err, "could not create Stream")
 
 	requireSize, _ := mgr.IsStreamMaxBytesRequired()
 
-	cfg := c.prepareConfig(pc, requireSize)
+	cfg := c.prepareConfig(requireSize)
 
 	switch {
 	case c.validateOnly:
@@ -3242,7 +3379,7 @@ func (c *streamCmd) addAction(pc *fisk.ParseContext) (err error) {
 		fmt.Println(string(j))
 		fmt.Println()
 		if !valid {
-			fisk.Fatalf("Validation Failed: %s", strings.Join(errs, "\n\t"))
+			fatalf("Validation Failed: %s", strings.Join(errs, "\n\t"))
 		}
 
 		fmt.Printf("Configuration is a valid Stream matching %s\n", cfg.SchemaType())
@@ -3250,10 +3387,10 @@ func (c *streamCmd) addAction(pc *fisk.ParseContext) (err error) {
 
 	case c.outFile != "":
 		valid, j, errs, err := c.validateCfg(&cfg)
-		fisk.FatalIfError(err, "Could not validate configuration")
+		fatalIfError(err, "Could not validate configuration")
 
 		if !valid {
-			fisk.Fatalf("Validation Failed: %s", strings.Join(errs, "\n\t"))
+			fatalf("Validation Failed: %s", strings.Join(errs, "\n\t"))
 		}
 
 		return os.WriteFile(c.outFile, j, 0600)
@@ -3267,7 +3404,7 @@ func (c *streamCmd) addAction(pc *fisk.ParseContext) (err error) {
 	}
 
 	str, err := mgr.NewStreamFromDefault(c.stream, cfg)
-	fisk.FatalIfError(err, "could not create Stream")
+	fatalIfError(err, "could not create Stream")
 
 	fmt.Printf("Stream %s was created\n\n", c.stream)
 
@@ -3294,14 +3431,16 @@ func (c *streamCmd) checkCompatibility(mgr *jsm.Manager, cfg *api.StreamConfig) 
 	return nil
 }
 
-func (c *streamCmd) rmAction(_ *fisk.ParseContext) (err error) {
+func (c *streamCmd) rmAction(_ *cobra.Command, args []string) (err error) {
+	c.stream = argValue(args, 0)
+
 	if c.force {
 		if c.stream == "" {
 			return fmt.Errorf("--force requires a stream name")
 		}
 
 		c.nc, c.mgr, err = prepareHelper("", natsOpts()...)
-		fisk.FatalIfError(err, "setup failed")
+		fatalIfError(err, "setup failed")
 
 		err = c.mgr.DeleteStream(c.stream)
 		if err != nil {
@@ -3316,27 +3455,29 @@ func (c *streamCmd) rmAction(_ *fisk.ParseContext) (err error) {
 	c.connectAndAskStream()
 
 	ok, err := askConfirmation(fmt.Sprintf("Really delete Stream %s", c.stream), false)
-	fisk.FatalIfError(err, "could not obtain confirmation")
+	fatalIfError(err, "could not obtain confirmation")
 
 	if !ok {
 		return nil
 	}
 
 	stream, err := c.loadStream(c.stream)
-	fisk.FatalIfError(err, "could not remove Stream")
+	fatalIfError(err, "could not remove Stream")
 
 	err = stream.Delete()
-	fisk.FatalIfError(err, "could not remove Stream")
+	fatalIfError(err, "could not remove Stream")
 
 	return nil
 }
 
-func (c *streamCmd) purgeAction(_ *fisk.ParseContext) (err error) {
+func (c *streamCmd) purgeAction(_ *cobra.Command, args []string) (err error) {
+	c.stream = argValue(args, 0)
+
 	c.connectAndAskStream()
 
 	if !c.force {
 		ok, err := askConfirmation(fmt.Sprintf("Really purge Stream %s", c.stream), false)
-		fisk.FatalIfError(err, "could not obtain confirmation")
+		fatalIfError(err, "could not obtain confirmation")
 
 		if !ok {
 			return nil
@@ -3351,7 +3492,7 @@ func (c *streamCmd) purgeAction(_ *fisk.ParseContext) (err error) {
 	}
 
 	stream, err := c.loadStream(c.stream)
-	fisk.FatalIfError(err, "could not purge Stream")
+	fatalIfError(err, "could not purge Stream")
 
 	var req *api.JSApiStreamPurgeRequest
 	if c.purgeKeep > 0 || c.purgeSubject != "" || c.purgeSequence > 0 {
@@ -3367,7 +3508,7 @@ func (c *streamCmd) purgeAction(_ *fisk.ParseContext) (err error) {
 	}
 
 	resp, err := stream.PurgeExt(req)
-	fisk.FatalIfError(err, "could not purge Stream")
+	fatalIfError(err, "could not purge Stream")
 
 	fmt.Printf("Purged %d messages from %s\n\n", resp.Purged, stream.Name())
 
@@ -3385,7 +3526,7 @@ func (c *streamCmd) lsNames(mgr *jsm.Manager, filter *jsm.StreamNamesFilter) err
 
 	if c.json {
 		err = iu.PrintJSON(names)
-		fisk.FatalIfError(err, "could not display Streams")
+		fatalIfError(err, "could not display Streams")
 		return nil
 	}
 
@@ -3396,9 +3537,9 @@ func (c *streamCmd) lsNames(mgr *jsm.Manager, filter *jsm.StreamNamesFilter) err
 	return nil
 }
 
-func (c *streamCmd) lsAction(_ *fisk.ParseContext) error {
+func (c *streamCmd) lsAction(_ *cobra.Command, _ []string) error {
 	_, mgr, err := prepareHelper("", natsOpts()...)
-	fisk.FatalIfError(err, "setup failed")
+	fatalIfError(err, "setup failed")
 
 	var filter *jsm.StreamNamesFilter
 	if c.filterSubject != "" {
@@ -3429,7 +3570,7 @@ func (c *streamCmd) lsAction(_ *fisk.ParseContext) error {
 
 	if c.json {
 		err = iu.PrintJSON(names)
-		fisk.FatalIfError(err, "could not display Streams")
+		fatalIfError(err, "could not display Streams")
 		return nil
 	}
 
@@ -3527,7 +3668,16 @@ func (c *streamCmd) renderMissing(out io.Writer, missing []string, offline map[s
 	}
 }
 
-func (c *streamCmd) rmMsgAction(_ *fisk.ParseContext) (err error) {
+func (c *streamCmd) rmMsgAction(_ *cobra.Command, args []string) (err error) {
+	c.stream = argValue(args, 0)
+	if v := argValue(args, 1); v != "" {
+		id, err := strconv.ParseInt(v, 10, 64)
+		if err != nil {
+			return fmt.Errorf("invalid message sequence %q: %w", v, err)
+		}
+		c.msgID = id
+	}
+
 	c.connectAndAskStream()
 
 	if c.msgID == -1 {
@@ -3535,10 +3685,10 @@ func (c *streamCmd) rmMsgAction(_ *fisk.ParseContext) (err error) {
 		err = iu.AskOne(&survey.Input{
 			Message: "Message Sequence to remove",
 		}, &id, survey.WithValidator(survey.Required))
-		fisk.FatalIfError(err, "invalid input")
+		fatalIfError(err, "invalid input")
 
 		idint, err := strconv.Atoi(id)
-		fisk.FatalIfError(err, "invalid number")
+		fatalIfError(err, "invalid number")
 
 		if idint <= 0 {
 			return fmt.Errorf("positive message ID required")
@@ -3547,7 +3697,7 @@ func (c *streamCmd) rmMsgAction(_ *fisk.ParseContext) (err error) {
 	}
 
 	stream, err := c.loadStream(c.stream)
-	fisk.FatalIfError(err, "could not load Stream %s", c.stream)
+	fatalIfError(err, "could not load Stream %s", c.stream)
 
 	if jsm.IsKVBucketStream(c.stream) {
 		err := c.kvAbstractionWarn(c.stream, "Really operate on the KV stream?")
@@ -3558,7 +3708,7 @@ func (c *streamCmd) rmMsgAction(_ *fisk.ParseContext) (err error) {
 
 	if !c.force {
 		ok, err := askConfirmation(fmt.Sprintf("Really remove message %d from Stream %s", c.msgID, c.stream), false)
-		fisk.FatalIfError(err, "could not obtain confirmation")
+		fatalIfError(err, "could not obtain confirmation")
 
 		if !ok {
 			return nil
@@ -3568,7 +3718,16 @@ func (c *streamCmd) rmMsgAction(_ *fisk.ParseContext) (err error) {
 	return stream.DeleteMessageRequest(api.JSApiMsgDeleteRequest{Seq: uint64(c.msgID)})
 }
 
-func (c *streamCmd) getAction(_ *fisk.ParseContext) (err error) {
+func (c *streamCmd) getAction(_ *cobra.Command, args []string) (err error) {
+	c.stream = argValue(args, 0)
+	if v := argValue(args, 1); v != "" {
+		id, err := strconv.ParseInt(v, 10, 64)
+		if err != nil {
+			return fmt.Errorf("invalid message sequence %q: %w", v, err)
+		}
+		c.msgID = id
+	}
+
 	c.connectAndAskStream()
 
 	if c.msgID == -1 && c.filterSubject == "" {
@@ -3577,10 +3736,10 @@ func (c *streamCmd) getAction(_ *fisk.ParseContext) (err error) {
 			Message: "Message Sequence to retrieve",
 			Default: "-1",
 		}, &id, survey.WithValidator(survey.Required))
-		fisk.FatalIfError(err, "invalid input")
+		fatalIfError(err, "invalid input")
 
 		idint, err := strconv.Atoi(id)
-		fisk.FatalIfError(err, "invalid number")
+		fatalIfError(err, "invalid number")
 
 		c.msgID = int64(idint)
 
@@ -3588,12 +3747,12 @@ func (c *streamCmd) getAction(_ *fisk.ParseContext) (err error) {
 			err = iu.AskOne(&survey.Input{
 				Message: "Subject to retrieve last message for",
 			}, &c.filterSubject)
-			fisk.FatalIfError(err, "invalid subject")
+			fatalIfError(err, "invalid subject")
 		}
 	}
 
 	stream, err := c.loadStream(c.stream)
-	fisk.FatalIfError(err, "could not load Stream %s", c.stream)
+	fatalIfError(err, "could not load Stream %s", c.stream)
 
 	var item *api.StoredMsg
 	if c.msgID > -1 {
@@ -3603,7 +3762,7 @@ func (c *streamCmd) getAction(_ *fisk.ParseContext) (err error) {
 	} else {
 		return fmt.Errorf("no ID or subject specified")
 	}
-	fisk.FatalIfError(err, "could not retrieve %s#%d", c.stream, c.msgID)
+	fatalIfError(err, "could not retrieve %s#%d", c.stream, c.msgID)
 
 	if c.json {
 		iu.PrintJSON(item)
@@ -3633,10 +3792,10 @@ func (c *streamCmd) connectAndAskStream() bool {
 
 	shouldAsk := c.stream == ""
 	c.nc, c.mgr, err = prepareHelper("", natsOpts()...)
-	fisk.FatalIfError(err, "setup failed")
+	fatalIfError(err, "setup failed")
 
 	c.stream, c.selectedStream, err = selectStream(c.mgr, c.stream, c.force, c.showAll)
-	fisk.FatalIfError(err, "could not pick a Stream to operate on")
+	fatalIfError(err, "could not pick a Stream to operate on")
 
 	return shouldAsk
 }

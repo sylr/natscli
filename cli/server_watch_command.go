@@ -13,12 +13,8 @@
 
 package cli
 
-import (
-	"github.com/choria-io/fisk"
-)
-
-func configureServerWatchCommand(srv *fisk.CmdClause) {
-	watch := srv.Command("watch", "Live views of server conditions")
+func configureServerWatchCommand(srv commandHost) {
+	watch := addCommand(srv, "watch", "Live views of server conditions")
 
 	configureServerWatchApiCommand(watch)
 	configureServerWatchAccountCommand(watch)

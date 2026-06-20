@@ -19,7 +19,7 @@ import (
 	"github.com/nats-io/jsm.go/api"
 	gatherer "github.com/nats-io/jsm.go/audit/gather"
 
-	"github.com/choria-io/fisk"
+	"github.com/spf13/cobra"
 )
 
 type auditGatherCmd struct {
@@ -27,25 +27,28 @@ type auditGatherCmd struct {
 	config   *gatherer.Configuration
 }
 
-func configureAuditGatherCommand(app *fisk.CmdClause) {
+func configureAuditGatherCommand(app *cobra.Command) {
 	c := &auditGatherCmd{
 		config: gatherer.NewCaptureConfiguration(),
 	}
 
-	gather := app.Command("gather", "capture a variety of data from a deployment into an archive file").Alias("capture").Alias("cap").Action(c.gather)
-	gather.Tag("scope:system", "impact:ro")
-	gather.Flag("output", "output file path of generated archive").Short('o').StringVar(&c.config.TargetPath)
-	gather.Flag("progress", "Display progress messages during gathering").Default("true").BoolVar(&c.progress)
-	gather.Flag("cluster", "Limit audit to servers from the named cluster").PlaceHolder("CLUSTER").Default("").StringVar(&c.config.ClusterFilter)
-	gather.Flag("server-endpoints", "Capture monitoring endpoints for each server").Default("true").BoolVar(&c.config.Include.ServerEndpoints)
-	gather.Flag("server-profiles", "Capture profiles for each server").Default("true").BoolVar(&c.config.Include.ServerProfiles)
-	gather.Flag("account-endpoints", "Capture monitoring endpoints for each account").Default("true").BoolVar(&c.config.Include.AccountEndpoints)
-	gather.Flag("streams", "Capture state of each stream").Default("true").BoolVar(&c.config.Include.Streams)
-	gather.Flag("consumers", "Capture state of each stream consumers").Default("true").BoolVar(&c.config.Include.Consumers)
-	gather.Flag("details", "Capture detailed server information from the audit").Default("true").BoolVar(&c.config.Detailed)
+	gather := addCommand(app, "gather", "capture a variety of data from a deployment into an archive file")
+	gather.Aliases = []string{"capture", "cap"}
+	gather.RunE = c.gather
+	cmdAddTags(gather, "scope:system", "impact:ro")
+	gather.Flags().StringVarP(&c.config.TargetPath, "output", "o", "", "output file path of generated archive")
+	negatableBoolVar(gather, &c.progress, "progress", true, "Display progress messages during gathering")
+	gather.Flags().StringVar(&c.config.ClusterFilter, "cluster", "", "Limit audit to servers from the named cluster")
+	flagPlaceholder(gather, "cluster", "CLUSTER")
+	negatableBoolVar(gather, &c.config.Include.ServerEndpoints, "server-endpoints", true, "Capture monitoring endpoints for each server")
+	negatableBoolVar(gather, &c.config.Include.ServerProfiles, "server-profiles", true, "Capture profiles for each server")
+	negatableBoolVar(gather, &c.config.Include.AccountEndpoints, "account-endpoints", true, "Capture monitoring endpoints for each account")
+	negatableBoolVar(gather, &c.config.Include.Streams, "streams", true, "Capture state of each stream")
+	negatableBoolVar(gather, &c.config.Include.Consumers, "consumers", true, "Capture state of each stream consumers")
+	negatableBoolVar(gather, &c.config.Detailed, "details", true, "Capture detailed server information from the audit")
 }
 
-func (c *auditGatherCmd) gather(_ *fisk.ParseContext) error {
+func (c *auditGatherCmd) gather(_ *cobra.Command, _ []string) error {
 	nc, err := newNatsConn("", natsOpts()...)
 	if err != nil {
 		return err

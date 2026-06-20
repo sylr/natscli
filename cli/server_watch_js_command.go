@@ -29,7 +29,7 @@ import (
 	iu "github.com/nats-io/natscli/internal/util"
 	terminal "golang.org/x/term"
 
-	"github.com/choria-io/fisk"
+	"github.com/spf13/cobra"
 )
 
 type srvWatchJSCmd struct {
@@ -42,7 +42,7 @@ type srvWatchJSCmd struct {
 	mu        sync.Mutex
 }
 
-func configureServerWatchJSCommand(watch *fisk.CmdClause) {
+func configureServerWatchJSCommand(watch commandHost) {
 	c := &srvWatchJSCmd{
 		servers: map[string]*server.ServerStatsMsg{},
 		sortNames: map[string]string{
@@ -56,14 +56,16 @@ func configureServerWatchJSCommand(watch *fisk.CmdClause) {
 	sortKeys := iu.MapKeys(c.sortNames)
 	sort.Strings(sortKeys)
 
-	js := watch.Command("jetstream", "Watch JetStream statistics").Alias("js").Alias("jsz").Action(c.jetstreamAction)
-	js.Tag("scope:system", "impact:ro")
-	js.HelpLong(`This waits for regular updates that each server sends and report seen totals
+	js := addCommand(watch, "jetstream", "Watch JetStream statistics")
+	js.Aliases = []string{"js", "jsz"}
+	js.RunE = c.jetstreamAction
+	cmdAddTags(js, "scope:system", "impact:ro")
+	js.Long = `This waits for regular updates that each server sends and report seen totals
 
 Since the updates are sent on a 30 second interval this is not a point in time view.
-`)
-	js.Flag("sort", fmt.Sprintf("Sorts by a specific property (%s)", strings.Join(sortKeys, ", "))).Default("assets").EnumVar(&c.sort, sortKeys...)
-	js.Flag("number", "Amount of Accounts to show by the selected dimension").Default("0").Short('n').IntVar(&c.top)
+`
+	js.Flags().Var(newEnumValue(&c.sort, "assets", sortKeys...), "sort", fmt.Sprintf("Sorts by a specific property (%s)", strings.Join(sortKeys, ", ")))
+	js.Flags().IntVarP(&c.top, "number", "n", 0, "Amount of Accounts to show by the selected dimension")
 }
 
 func (c *srvWatchJSCmd) updateSizes() error {
@@ -104,7 +106,7 @@ func (c *srvWatchJSCmd) prePing(nc *nats.Conn, h nats.MsgHandler) {
 	nc.PublishMsg(msg)
 }
 
-func (c *srvWatchJSCmd) jetstreamAction(_ *fisk.ParseContext) error {
+func (c *srvWatchJSCmd) jetstreamAction(_ *cobra.Command, _ []string) error {
 	nc, _, err := prepareHelper("", natsOpts()...)
 	if err != nil {
 		return err

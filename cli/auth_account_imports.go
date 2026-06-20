@@ -21,13 +21,18 @@ import (
 	"strings"
 
 	"github.com/AlecAivazis/survey/v2"
-	"github.com/choria-io/fisk"
 	au "github.com/nats-io/natscli/internal/auth"
 	iu "github.com/nats-io/natscli/internal/util"
 	ab "github.com/synadia-io/jwt-auth-builder.go"
+
+	"github.com/spf13/cobra"
 )
 
-func (c *authAccountCommand) importKvAction(_ *fisk.ParseContext) error {
+func (c *authAccountCommand) importKvAction(_ *cobra.Command, args []string) error {
+	c.bucketName = args[0]
+	c.prefix = args[1]
+	c.importAccount = args[2]
+
 	auth, _, acct, err := c.selectAccount(true)
 	if err != nil {
 		return err
@@ -99,7 +104,11 @@ func (c *authAccountCommand) importKvAction(_ *fisk.ParseContext) error {
 	return nil
 }
 
-func (c *authAccountCommand) importAddAction(_ *fisk.ParseContext) error {
+func (c *authAccountCommand) importAddAction(_ *cobra.Command, args []string) error {
+	c.importName = args[0]
+	c.subject = args[1]
+	c.accountName = argValue(args, 2)
+
 	auth, op, acct, err := c.selectAccount(true)
 	if err != nil {
 		return err
@@ -163,7 +172,10 @@ func (c *authAccountCommand) importAddAction(_ *fisk.ParseContext) error {
 	return c.fShowImport(os.Stdout, imp, op)
 }
 
-func (c *authAccountCommand) importLsAction(_ *fisk.ParseContext) error {
+func (c *authAccountCommand) importLsAction(_ *cobra.Command, args []string) error {
+	c.accountName = argValue(args, 0)
+	c.operatorName = argValue(args, 1)
+
 	_, op, acct, err := c.selectAccount(true)
 	if err != nil {
 		return err
@@ -236,7 +248,10 @@ func (c *authAccountCommand) importsBySubject(acct ab.Account) []ab.Import {
 	return ret
 }
 
-func (c *authAccountCommand) importInfoAction(_ *fisk.ParseContext) error {
+func (c *authAccountCommand) importInfoAction(_ *cobra.Command, args []string) error {
+	c.subject = argValue(args, 0)
+	c.accountName = argValue(args, 1)
+
 	_, op, acct, err := c.selectAccount(true)
 	if err != nil {
 		return err
@@ -271,7 +286,12 @@ func (c *authAccountCommand) importInfoAction(_ *fisk.ParseContext) error {
 	return c.fShowImport(os.Stdout, imp, op)
 }
 
-func (c *authAccountCommand) importEditAction(_ *fisk.ParseContext) error {
+func (c *authAccountCommand) importEditAction(cmd *cobra.Command, args []string) error {
+	c.subject = args[0]
+	c.accountName = argValue(args, 1)
+	c.allowTraceIsSet = cmd.Flags().Changed("traceable")
+	c.shareIsSet = cmd.Flags().Changed("share")
+
 	auth, op, acct, err := c.selectAccount(true)
 	if err != nil {
 		return err
@@ -316,7 +336,10 @@ func (c *authAccountCommand) importEditAction(_ *fisk.ParseContext) error {
 	return c.fShowImport(os.Stdout, imp, op)
 }
 
-func (c *authAccountCommand) importRmAction(_ *fisk.ParseContext) error {
+func (c *authAccountCommand) importRmAction(_ *cobra.Command, args []string) error {
+	c.subject = args[0]
+	c.accountName = argValue(args, 1)
+
 	auth, _, acct, err := c.selectAccount(true)
 	if err != nil {
 		return err

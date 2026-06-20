@@ -20,7 +20,7 @@ import (
 	"github.com/nats-io/jsm.go/serverdata"
 	"github.com/nats-io/nats-server/v2/server"
 
-	"github.com/choria-io/fisk"
+	"github.com/spf13/cobra"
 )
 
 type SrvConfigCmd struct {
@@ -28,18 +28,21 @@ type SrvConfigCmd struct {
 	force    bool
 }
 
-func configureServerConfigCommand(srv *fisk.CmdClause) {
+func configureServerConfigCommand(srv *cobra.Command) {
 	c := SrvConfigCmd{}
 
-	cfg := srv.Command("config", "Interact with server configuration")
+	cfg := addCommand(srv, "config", "Interact with server configuration")
 
-	reload := cfg.Command("reload", "Reloads the runtime configuration").Action(c.reloadAction)
-	reload.Tag("scope:system", "impact:rw")
-	reload.Arg("id", "The server ID to trigger a reload for").Required().StringVar(&c.serverID)
-	reload.Flag("force", "Force reload without prompting").Short('f').BoolVar(&c.force)
+	reload := addCommand(cfg, "reload", "Reloads the runtime configuration")
+	reload.RunE = c.reloadAction
+	cmdAddTags(reload, "scope:system", "impact:rw")
+	addArg(reload, "id", "The server ID to trigger a reload for", true, "string")
+	negatableBoolVarP(reload, &c.force, "force", "f", false, "Force reload without prompting")
 }
 
-func (c *SrvConfigCmd) reloadAction(pc *fisk.ParseContext) error {
+func (c *SrvConfigCmd) reloadAction(cmd *cobra.Command, args []string) error {
+	c.serverID = args[0]
+
 	nc, err := newNatsConn("", natsOpts()...)
 	if err != nil {
 		return err
@@ -80,5 +83,5 @@ func (c *SrvConfigCmd) reloadAction(pc *fisk.ParseContext) error {
 	}
 
 	nfo := &SrvInfoCmd{id: c.serverID}
-	return nfo.info(pc)
+	return nfo.info(cmd, args)
 }

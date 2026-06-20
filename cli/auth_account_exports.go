@@ -21,12 +21,15 @@ import (
 	"strings"
 
 	"github.com/AlecAivazis/survey/v2"
-	"github.com/choria-io/fisk"
 	iu "github.com/nats-io/natscli/internal/util"
 	ab "github.com/synadia-io/jwt-auth-builder.go"
+
+	"github.com/spf13/cobra"
 )
 
-func (c *authAccountCommand) exportKvAction(_ *fisk.ParseContext) error {
+func (c *authAccountCommand) exportKvAction(_ *cobra.Command, args []string) error {
+	c.bucketName = args[0]
+
 	auth, _, acct, err := c.selectAccount(true)
 	if err != nil {
 		return err
@@ -173,7 +176,10 @@ func (c *authAccountCommand) showExport(exp ab.Export) (string, error) {
 	return cols.Render()
 }
 
-func (c *authAccountCommand) exportRmAction(_ *fisk.ParseContext) error {
+func (c *authAccountCommand) exportRmAction(_ *cobra.Command, args []string) error {
+	c.subject = args[0]
+	c.accountName = argValue(args, 1)
+
 	auth, _, acct, err := c.selectAccount(true)
 	if err != nil {
 		return err
@@ -210,7 +216,10 @@ func (c *authAccountCommand) exportRmAction(_ *fisk.ParseContext) error {
 	return auth.Commit()
 }
 
-func (c *authAccountCommand) exportInfoAction(_ *fisk.ParseContext) error {
+func (c *authAccountCommand) exportInfoAction(_ *cobra.Command, args []string) error {
+	c.subject = argValue(args, 0)
+	c.accountName = argValue(args, 1)
+
 	_, _, acct, err := c.selectAccount(true)
 	if err != nil {
 		return err
@@ -245,7 +254,12 @@ func (c *authAccountCommand) exportInfoAction(_ *fisk.ParseContext) error {
 	return c.fShowExport(os.Stdout, exp)
 }
 
-func (c *authAccountCommand) exportEditAction(_ *fisk.ParseContext) error {
+func (c *authAccountCommand) exportEditAction(cmd *cobra.Command, args []string) error {
+	c.subject = args[0]
+	c.accountName = argValue(args, 1)
+	c.descriptionIsSet = cmd.Flags().Changed("description")
+	c.advertiseIsSet = cmd.Flags().Changed("advertise")
+
 	auth, _, acct, err := c.selectAccount(true)
 	if err != nil {
 		return err
@@ -292,7 +306,11 @@ func (c *authAccountCommand) exportEditAction(_ *fisk.ParseContext) error {
 	return c.fShowExport(os.Stdout, exp)
 }
 
-func (c *authAccountCommand) exportAddAction(_ *fisk.ParseContext) error {
+func (c *authAccountCommand) exportAddAction(_ *cobra.Command, args []string) error {
+	c.exportName = args[0]
+	c.subject = args[1]
+	c.accountName = argValue(args, 2)
+
 	auth, _, acct, err := c.selectAccount(true)
 	if err != nil {
 		return err
@@ -344,7 +362,9 @@ func (c *authAccountCommand) exportAddAction(_ *fisk.ParseContext) error {
 	return c.fShowExport(os.Stdout, exp)
 }
 
-func (c *authAccountCommand) exportLsAction(_ *fisk.ParseContext) error {
+func (c *authAccountCommand) exportLsAction(_ *cobra.Command, args []string) error {
+	c.accountName = argValue(args, 0)
+
 	_, _, acct, err := c.selectAccount(true)
 	if err != nil {
 		return err

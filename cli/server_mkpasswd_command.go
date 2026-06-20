@@ -17,9 +17,9 @@ import (
 	"fmt"
 
 	"github.com/AlecAivazis/survey/v2"
-	"github.com/choria-io/fisk"
 	"github.com/nats-io/natscli/internal/fips"
 	iu "github.com/nats-io/natscli/internal/util"
+	"github.com/spf13/cobra"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -29,16 +29,19 @@ type SrvPasswdCmd struct {
 	generate bool
 }
 
-func configureServerPasswdCommand(srv *fisk.CmdClause) {
+func configureServerPasswdCommand(srv *cobra.Command) {
 	c := &SrvPasswdCmd{}
 
-	passwd := srv.Command("passwd", "Creates encrypted passwords for use in NATS Server").Alias("mkpasswd").Alias("pass").Alias("password").Action(c.mkpasswd)
-	passwd.Flag("pass", "The password to encrypt (PASSWORD)").Short('p').Envar("PASSWORD").StringVar(&c.pass)
-	passwd.Flag("cost", "The cost to use in the bcrypt argument").Short('c').Default("11").UintVar(&c.cost)
-	passwd.Flag("generate", "Generates a secure passphrase and encrypt it").Short('g').UnNegatableBoolVar(&c.generate)
+	passwd := addCommand(srv, "passwd", "Creates encrypted passwords for use in NATS Server")
+	passwd.Aliases = []string{"mkpasswd", "pass", "password"}
+	passwd.RunE = c.mkpasswd
+	passwd.Flags().StringVarP(&c.pass, "pass", "p", "", "The password to encrypt (PASSWORD)")
+	flagEnvVar(passwd, "pass", "PASSWORD")
+	passwd.Flags().UintVarP(&c.cost, "cost", "c", 11, "The cost to use in the bcrypt argument")
+	passwd.Flags().BoolVarP(&c.generate, "generate", "g", false, "Generates a secure passphrase and encrypt it")
 }
 
-func (c *SrvPasswdCmd) mkpasswd(_ *fisk.ParseContext) error {
+func (c *SrvPasswdCmd) mkpasswd(_ *cobra.Command, _ []string) error {
 	if fips.Enabled() {
 		return fips.DisabledError("nats server passwd", "bcrypt")
 	}

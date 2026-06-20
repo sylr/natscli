@@ -27,7 +27,7 @@ import (
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/natscli/internal/util"
 
-	"github.com/choria-io/fisk"
+	"github.com/spf13/cobra"
 )
 
 type (
@@ -57,17 +57,19 @@ type (
 
 func configureStreamCheckCommand(app commandHost) {
 	sc := &StreamCheckCmd{}
-	streamCheck := app.Command("stream-check", "Check and display stream information").Action(sc.streamCheck).Hidden()
-	streamCheck.Tag("scope:system", "impact:ro")
-	streamCheck.Flag("stream", "Filter results by stream").StringVar(&sc.streamName)
-	streamCheck.Flag("raft-group", "Filter results by raft group").StringVar(&sc.raftGroup)
-	streamCheck.Flag("health", "Check health from streams").UnNegatableBoolVar(&sc.health)
-	streamCheck.Flag("expected", "Expected number of servers").IntVar(&sc.expected)
-	streamCheck.Flag("unsynced", "Filter results by streams that are out of sync").UnNegatableBoolVar(&sc.unsyncedFilter)
-	streamCheck.Flag("stdin", "Process the result of 'nats server request jsz --all --config' from STDIN").UnNegatableBoolVar(&sc.stdin)
-	streamCheck.Flag("read-timeout", "Read timeout in seconds").Default("5").IntVar(&sc.readTimeout)
-	streamCheck.Flag("csv", "Renders CSV format").UnNegatableBoolVar(&sc.csv)
-	streamCheck.Flag("archive", "Read data from an archive file").StringVar(&sc.archivePath)
+	streamCheck := addCommand(app, "stream-check", "Check and display stream information")
+	streamCheck.RunE = sc.streamCheck
+	streamCheck.Hidden = true
+	cmdAddTags(streamCheck, "scope:system", "impact:ro")
+	streamCheck.Flags().StringVar(&sc.streamName, "stream", "", "Filter results by stream")
+	streamCheck.Flags().StringVar(&sc.raftGroup, "raft-group", "", "Filter results by raft group")
+	streamCheck.Flags().BoolVar(&sc.health, "health", false, "Check health from streams")
+	streamCheck.Flags().IntVar(&sc.expected, "expected", 0, "Expected number of servers")
+	streamCheck.Flags().BoolVar(&sc.unsyncedFilter, "unsynced", false, "Filter results by streams that are out of sync")
+	streamCheck.Flags().BoolVar(&sc.stdin, "stdin", false, "Process the result of 'nats server request jsz --all --config' from STDIN")
+	streamCheck.Flags().IntVar(&sc.readTimeout, "read-timeout", 5, "Read timeout in seconds")
+	streamCheck.Flags().BoolVar(&sc.csv, "csv", false, "Renders CSV format")
+	streamCheck.Flags().StringVar(&sc.archivePath, "archive", "", "Read data from an archive file")
 }
 
 func (c *StreamCheckCmd) dataSource(nc *nats.Conn) (serverdata.Source, error) {
@@ -84,7 +86,7 @@ func (c *StreamCheckCmd) dataSource(nc *nats.Conn) (serverdata.Source, error) {
 	return serverdata.NewLive(nc, reqFn, c.expected)
 }
 
-func (c *StreamCheckCmd) streamCheck(_ *fisk.ParseContext) error {
+func (c *StreamCheckCmd) streamCheck(_ *cobra.Command, _ []string) error {
 	if c.health && c.archivePath != "" {
 		return fmt.Errorf("--health requires a live server connection")
 	}

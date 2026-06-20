@@ -27,7 +27,7 @@ import (
 	"github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
 
-	"github.com/choria-io/fisk"
+	"github.com/spf13/cobra"
 )
 
 type SrvClusterCmd struct {
@@ -46,38 +46,54 @@ type SrvClusterCmd struct {
 	balanceKinds      []string
 }
 
-func configureServerClusterCommand(srv *fisk.CmdClause) {
+func configureServerClusterCommand(srv *cobra.Command) {
 	c := &SrvClusterCmd{}
 
-	cluster := srv.Command("cluster", "Manage JetStream Clustering").Alias("r").Alias("raft")
+	cluster := addCommand(srv, "cluster", "Manage JetStream Clustering")
+	cluster.Aliases = []string{"r", "raft"}
 
-	balance := cluster.Command("balance", "Balance cluster connections").Action(c.balanceAction)
-	balance.Tag("scope:system", "impact:rw")
-	balance.Arg("duration", "Spread balance requests over a certain duration").Default("2m").DurationVar(&c.balanceRunTime)
-	balance.Flag("server-name", "Restrict balancing to a specific server").PlaceHolder("NAME").StringVar(&c.balanceServerName)
-	balance.Flag("cluster", "Restrict balancing to servers in a specific cluster").PlaceHolder("NAME").StringVar(&c.balanceCluster)
-	balance.Flag("idle", "Balance connections that has been idle for a period").PlaceHolder("DURATION").DurationVar(&c.balanceIdle)
-	balance.Flag("account", "Balance connections in a certain account only").StringVar(&c.balanceAccount)
-	balance.Flag("subject", "Balance connections interested in certain subjects").StringVar(&c.balanceSubject)
-	balance.Flag("kind", "Balance only certain kinds of connection (*Client, Leafnode)").Default("Client").EnumsVar(&c.balanceKinds, "Client", "Leafnode")
-	balance.Flag("force", "Force rebalance without prompting").Short('f').UnNegatableBoolVar(&c.force)
+	balance := addCommand(cluster, "balance", "Balance cluster connections")
+	balance.RunE = c.balanceAction
+	cmdAddTags(balance, "scope:system", "impact:rw")
+	addArgWithDefault(balance, "duration", "Spread balance requests over a certain duration", "2m", "duration")
+	balance.Flags().StringVar(&c.balanceServerName, "server-name", "", "Restrict balancing to a specific server")
+	flagPlaceholder(balance, "server-name", "NAME")
+	balance.Flags().StringVar(&c.balanceCluster, "cluster", "", "Restrict balancing to servers in a specific cluster")
+	flagPlaceholder(balance, "cluster", "NAME")
+	balance.Flags().DurationVar(&c.balanceIdle, "idle", 0, "Balance connections that has been idle for a period")
+	flagPlaceholder(balance, "idle", "DURATION")
+	balance.Flags().StringVar(&c.balanceAccount, "account", "", "Balance connections in a certain account only")
+	balance.Flags().StringVar(&c.balanceSubject, "subject", "", "Balance connections interested in certain subjects")
+	c.balanceKinds = []string{"Client"}
+	balance.Flags().Var(newEnumsValue(&c.balanceKinds, "Client", "Leafnode"), "kind", "Balance only certain kinds of connection (*Client, Leafnode)")
+	balance.Flags().BoolVarP(&c.force, "force", "f", false, "Force rebalance without prompting")
 
-	sd := cluster.Command("step-down", "Force a new leader election by standing down the current meta leader").Alias("stepdown").Alias("sd").Alias("elect").Alias("down").Alias("d").Action(c.metaLeaderStandDownAction)
-	sd.Tag("scope:system", "impact:rw")
-	sd.Flag("cluster", "Request placement of the leader in a specific cluster").StringVar(&c.placementCluster)
-	sd.Flag("tags", "Request placement of the leader on nodes with specific tag(s)").StringsVar(&c.placementTags)
-	sd.Flag("host", "Request placement of the leader on a specific node").StringVar(&c.placementNode)
-	sd.Flag("json", "Produce JSON output").Short('j').UnNegatableBoolVar(&c.json)
-	sd.Flag("force", "Force leader step down ignoring current leader").Short('f').UnNegatableBoolVar(&c.force)
+	sd := addCommand(cluster, "step-down", "Force a new leader election by standing down the current meta leader")
+	sd.Aliases = []string{"stepdown", "sd", "elect", "down", "d"}
+	sd.RunE = c.metaLeaderStandDownAction
+	cmdAddTags(sd, "scope:system", "impact:rw")
+	sd.Flags().StringVar(&c.placementCluster, "cluster", "", "Request placement of the leader in a specific cluster")
+	sd.Flags().StringArrayVar(&c.placementTags, "tags", nil, "Request placement of the leader on nodes with specific tag(s)")
+	sd.Flags().StringVar(&c.placementNode, "host", "", "Request placement of the leader on a specific node")
+	sd.Flags().BoolVarP(&c.json, "json", "j", false, "Produce JSON output")
+	sd.Flags().BoolVarP(&c.force, "force", "f", false, "Force leader step down ignoring current leader")
 
-	rm := cluster.Command("peer-remove", "Removes a server from a JetStream cluster").Alias("rm").Alias("pr").Action(c.metaPeerRemoveAction)
-	rm.Tag("scope:system", "impact:rw")
-	rm.Arg("name", "The Server Name or ID to remove from the JetStream cluster").Required().StringVar(&c.peer)
-	rm.Flag("force", "Force removal without prompting").Short('f').UnNegatableBoolVar(&c.force)
-	rm.Flag("json", "Produce JSON output").Short('j').UnNegatableBoolVar(&c.json)
+	rm := addCommand(cluster, "peer-remove", "Removes a server from a JetStream cluster")
+	rm.Aliases = []string{"rm", "pr"}
+	rm.RunE = c.metaPeerRemoveAction
+	cmdAddTags(rm, "scope:system", "impact:rw")
+	addArg(rm, "name", "The Server Name or ID to remove from the JetStream cluster", true, "string")
+	rm.Flags().BoolVarP(&c.force, "force", "f", false, "Force removal without prompting")
+	rm.Flags().BoolVarP(&c.json, "json", "j", false, "Produce JSON output")
 }
 
-func (c *SrvClusterCmd) balanceAction(_ *fisk.ParseContext) error {
+func (c *SrvClusterCmd) balanceAction(_ *cobra.Command, args []string) error {
+	d, err := parseDuration(args[0])
+	if err != nil {
+		return err
+	}
+	c.balanceRunTime = d
+
 	nc, _, err := prepareHelper("", natsOpts()...)
 	if err != nil {
 		return err
@@ -165,7 +181,9 @@ func (c *SrvClusterCmd) detectClusters(nc *nats.Conn) ([]string, error) {
 	return clusters, nil
 }
 
-func (c *SrvClusterCmd) metaPeerRemoveAction(_ *fisk.ParseContext) error {
+func (c *SrvClusterCmd) metaPeerRemoveAction(_ *cobra.Command, args []string) error {
+	c.peer = args[0]
+
 	nc, mgr, err := prepareHelper("", natsOpts()...)
 	if err != nil {
 		return err
@@ -234,7 +252,7 @@ which may lead to duplicate deliveries.`)
 		} else {
 			remove, err = askConfirmation(fmt.Sprintf("Really remove %s peer %s with id %s", state, foundName, foundID), false)
 		}
-		fisk.FatalIfError(err, "Could not prompt for confirmation")
+		fatalIfError(err, "Could not prompt for confirmation")
 		if !remove {
 			fmt.Println("Removal canceled")
 			os.Exit(0)
@@ -246,12 +264,12 @@ which may lead to duplicate deliveries.`)
 	} else {
 		err = mgr.MetaPeerRemove(foundName, foundID)
 	}
-	fisk.FatalIfError(err, "Could not remove %s", foundID)
+	fatalIfError(err, "Could not remove %s", foundID)
 
 	return nil
 }
 
-func (c *SrvClusterCmd) metaLeaderStandDownAction(_ *fisk.ParseContext) error {
+func (c *SrvClusterCmd) metaLeaderStandDownAction(_ *cobra.Command, _ []string) error {
 	nc, mgr, err := prepareHelper("", natsOpts()...)
 	if err != nil {
 		return err

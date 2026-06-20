@@ -27,11 +27,11 @@ import (
 	iu "github.com/nats-io/natscli/internal/util"
 
 	"github.com/AlecAivazis/survey/v2"
-	"github.com/choria-io/fisk"
 	"github.com/fatih/color"
 	"github.com/ghodss/yaml"
 	"github.com/nats-io/jsm.go/natscontext"
 	"github.com/nats-io/nats.go"
+	"github.com/spf13/cobra"
 )
 
 type ctxCommand struct {
@@ -53,11 +53,14 @@ type ctxCommand struct {
 func configureCtxCommand(app commandHost) {
 	c := ctxCommand{}
 
-	context := app.Command("context", "Manage nats configuration contexts").Alias("ctx")
+	context := addCommand(app, "context", "Manage nats configuration contexts")
+	context.Aliases = []string{"ctx"}
 	addCheat("contexts", context)
 
-	save := context.Command("add", "Update or create a context").Alias("create").Alias("save").Action(c.createCommand)
-	save.HelpLong(`When using --creds, --nkey, --jwt and --seed the following formats are supported
+	save := addCommand(context, "add", "Update or create a context")
+	save.Aliases = []string{"create", "save"}
+	save.RunE = c.createCommand
+	save.Long = `When using --creds, --nkey, --jwt and --seed the following formats are supported
 
   - /some/path                  - direct path to a file
   - file://path                 - alternative form for a path
@@ -66,47 +69,64 @@ func configureCtxCommand(app commandHost) {
   - env://NAME                  - read from environment variable NAME
 
 File paths can also be embedded into the context JSON using --embed
-`)
+`
 
-	save.Arg("name", "The context name to act on").Required().StringVar(&c.name)
-	save.Flag("description", "Set a friendly description for this context").StringVar(&c.description)
-	save.Flag("select", "Select the saved context as the default one").UnNegatableBoolVar(&c.activate)
-	save.Flag("embed", "Embeds credential content in the body of the context").UnNegatableBoolVar(&c.embed)
+	addArg(save, "name", "The context name to act on", true, "string")
+	save.Flags().StringVar(&c.description, "description", "", "Set a friendly description for this context")
+	save.Flags().BoolVar(&c.activate, "select", false, "Select the saved context as the default one")
+	save.Flags().BoolVar(&c.embed, "embed", false, "Embeds credential content in the body of the context")
 
-	dupe := context.Command("copy", "Copies an existing context").Alias("cp").Action(c.copyCommand)
-	dupe.Arg("source", "The name of the context to copy from").Required().StringVar(&c.source)
-	dupe.Arg("name", "The name of the context to create").Required().StringVar(&c.name)
-	dupe.Flag("description", "Set a friendly description for this context").StringVar(&c.description)
-	dupe.Flag("select", "Select the saved context as the default one").UnNegatableBoolVar(&c.activate)
-	dupe.Flag("embed", "Embeds credential content in the body of the context").UnNegatableBoolVar(&c.embed)
+	dupe := addCommand(context, "copy", "Copies an existing context")
+	dupe.Aliases = []string{"cp"}
+	dupe.RunE = c.copyCommand
+	addArg(dupe, "source", "The name of the context to copy from", true, "string")
+	addArg(dupe, "name", "The name of the context to create", true, "string")
+	dupe.Flags().StringVar(&c.description, "description", "", "Set a friendly description for this context")
+	dupe.Flags().BoolVar(&c.activate, "select", false, "Select the saved context as the default one")
+	dupe.Flags().BoolVar(&c.embed, "embed", false, "Embeds credential content in the body of the context")
 
-	edit := context.Command("edit", "Edit a context in your EDITOR").Alias("vi").Action(c.editCommand)
-	edit.Arg("name", "The context name to edit").Required().StringVar(&c.name)
+	edit := addCommand(context, "edit", "Edit a context in your EDITOR")
+	edit.Aliases = []string{"vi"}
+	edit.RunE = c.editCommand
+	addArg(edit, "name", "The context name to edit", true, "string")
 
-	ls := context.Command("ls", "List known contexts").Alias("list").Alias("l").Action(c.listCommand)
-	ls.Flag("completion", "Format the list for use by shell completion").Hidden().UnNegatableBoolVar(&c.completionFormat)
-	ls.Flag("json", "Show the list in JSON format").Short('j').UnNegatableBoolVar(&c.json)
-	ls.Flag("names", "List just the names of known contexts").UnNegatableBoolVar(&c.namesFormat)
+	ls := addCommand(context, "ls", "List known contexts")
+	ls.Aliases = []string{"list", "l"}
+	ls.RunE = c.listCommand
+	ls.Flags().BoolVar(&c.completionFormat, "completion", false, "Format the list for use by shell completion")
+	_ = ls.Flags().MarkHidden("completion")
+	ls.Flags().BoolVarP(&c.json, "json", "j", false, "Show the list in JSON format")
+	ls.Flags().BoolVar(&c.namesFormat, "names", false, "List just the names of known contexts")
 
-	rm := context.Command("rm", "Remove a context").Alias("remove").Action(c.removeCommand)
-	rm.Arg("name", "The context name to remove").Required().StringVar(&c.name)
-	rm.Flag("force", "Force remove without prompting").Short('f').UnNegatableBoolVar(&c.force)
+	rm := addCommand(context, "rm", "Remove a context")
+	rm.Aliases = []string{"remove"}
+	rm.RunE = c.removeCommand
+	addArg(rm, "name", "The context name to remove", true, "string")
+	rm.Flags().BoolVarP(&c.force, "force", "f", false, "Force remove without prompting")
 
-	pick := context.Command("select", "Select the default context").Alias("switch").Alias("set").Action(c.selectCommand)
-	pick.Arg("name", "The context name to select").StringVar(&c.name)
+	pick := addCommand(context, "select", "Select the default context")
+	pick.Aliases = []string{"switch", "set"}
+	pick.RunE = c.selectCommand
+	addArg(pick, "name", "The context name to select", false, "string")
 
-	context.Command("unselect", "Ensures that no context is the default context").Action(c.unselectCommand)
+	unselect := addCommand(context, "unselect", "Ensures that no context is the default context")
+	unselect.RunE = c.unselectCommand
 
-	info := context.Command("info", "Display information on the current or named context").Alias("show").Alias("v").Alias("view").Action(c.showCommand)
-	info.Arg("name", "The context name to show").StringVar(&c.name)
-	info.Flag("json", "Show the context in JSON format").Short('j').UnNegatableBoolVar(&c.json)
-	info.Flag("connect", "Attempts to connect to NATS using the context while validating").UnNegatableBoolVar(&c.activate)
+	info := addCommand(context, "info", "Display information on the current or named context")
+	info.Aliases = []string{"show", "v", "view"}
+	info.RunE = c.showCommand
+	addArg(info, "name", "The context name to show", false, "string")
+	info.Flags().BoolVarP(&c.json, "json", "j", false, "Show the context in JSON format")
+	info.Flags().BoolVar(&c.activate, "connect", false, "Attempts to connect to NATS using the context while validating")
 
-	validate := context.Command("validate", "Validate one or all contexts").Action(c.validateCommand)
-	validate.Arg("name", "Validate a specific context, validates all when not supplied").StringVar(&c.name)
-	validate.Flag("connect", "Attempts to connect to NATS using the context while validating").UnNegatableBoolVar(&c.activate)
+	validate := addCommand(context, "validate", "Validate one or all contexts")
+	validate.RunE = c.validateCommand
+	addArg(validate, "name", "Validate a specific context, validates all when not supplied", false, "string")
+	validate.Flags().BoolVar(&c.activate, "connect", false, "Attempts to connect to NATS using the context while validating")
 
-	context.Command("previous", "Switch to the previous context").Alias("-").Action(c.switchPreviousCtx)
+	previous := addCommand(context, "previous", "Switch to the previous context")
+	previous.Aliases = []string{"-"}
+	previous.RunE = c.switchPreviousCtx
 }
 
 func init() {
@@ -151,7 +171,9 @@ func (c *ctxCommand) overrideVars() []string {
 	return list
 }
 
-func (c *ctxCommand) validateCommand(pc *fisk.ParseContext) error {
+func (c *ctxCommand) validateCommand(cmd *cobra.Command, args []string) error {
+	c.name = argValue(args, 0)
+
 	var contexts []string
 	var err error
 
@@ -166,7 +188,7 @@ func (c *ctxCommand) validateCommand(pc *fisk.ParseContext) error {
 
 	for _, name := range contexts {
 		c.name = name
-		err := c.showCommand(pc)
+		err := c.showCommand(cmd, []string{name})
 		if err != nil {
 			fmt.Printf("Could not load %s: %s\n\n", name, color.RedString(err.Error()))
 		}
@@ -181,7 +203,10 @@ func (c *ctxCommand) validateCommand(pc *fisk.ParseContext) error {
 	return nil
 }
 
-func (c *ctxCommand) copyCommand(pc *fisk.ParseContext) error {
+func (c *ctxCommand) copyCommand(cmd *cobra.Command, args []string) error {
+	c.source = args[0]
+	c.name = args[1]
+
 	if !c.registry().Known(ctx, c.source) {
 		return fmt.Errorf("unknown context %q", c.source)
 	}
@@ -192,7 +217,7 @@ func (c *ctxCommand) copyCommand(pc *fisk.ParseContext) error {
 
 	opts().CfgCtx = c.source
 
-	return c.createCommand(pc)
+	return c.createCommand(cmd, []string{c.name})
 }
 
 var ctxYamlTemplate = `# Friendly description for this context shown when listing contexts
@@ -289,7 +314,9 @@ jetstream_event_prefix: {{ .JSEventPrefix | t }}
 socks_proxy: {{ .SocksProxy | t }}
 `
 
-func (c *ctxCommand) editCommand(pc *fisk.ParseContext) error {
+func (c *ctxCommand) editCommand(cmd *cobra.Command, args []string) error {
+	c.name = args[0]
+
 	if !c.registry().Known(ctx, c.name) {
 		return fmt.Errorf("unknown context %q", c.name)
 	}
@@ -357,7 +384,7 @@ func (c *ctxCommand) editCommand(pc *fisk.ParseContext) error {
 		return err
 	}
 
-	err = c.showCommand(pc)
+	err = c.showCommand(cmd, args)
 	if err != nil {
 		return err
 	}
@@ -417,7 +444,7 @@ func (c *ctxCommand) renderListTable(current string, known []*natscontext.Contex
 	fmt.Println(table.Render())
 
 }
-func (c *ctxCommand) listCommand(_ *fisk.ParseContext) error {
+func (c *ctxCommand) listCommand(_ *cobra.Command, _ []string) error {
 	names, err := c.registry().List(ctx)
 	if err != nil {
 		return err
@@ -456,7 +483,9 @@ func (c *ctxCommand) listCommand(_ *fisk.ParseContext) error {
 	return nil
 }
 
-func (c *ctxCommand) showCommand(_ *fisk.ParseContext) error {
+func (c *ctxCommand) showCommand(_ *cobra.Command, args []string) error {
+	c.name = argValue(args, 0)
+
 	var err error
 
 	if c.name == "" {
@@ -598,7 +627,9 @@ func (c *ctxCommand) showCommand(_ *fisk.ParseContext) error {
 	return nil
 }
 
-func (c *ctxCommand) createCommand(pc *fisk.ParseContext) error {
+func (c *ctxCommand) createCommand(cmd *cobra.Command, args []string) error {
+	c.name = args[0]
+
 	lname := ""
 	load := false
 	opts := opts()
@@ -664,13 +695,15 @@ func (c *ctxCommand) createCommand(pc *fisk.ParseContext) error {
 	}
 
 	if c.activate {
-		return c.selectCommand(pc)
+		return c.selectCommand(cmd, []string{c.name})
 	}
 
-	return c.showCommand(pc)
+	return c.showCommand(cmd, []string{c.name})
 }
 
-func (c *ctxCommand) removeCommand(_ *fisk.ParseContext) error {
+func (c *ctxCommand) removeCommand(_ *cobra.Command, args []string) error {
+	c.name = args[0]
+
 	selected, err := c.registry().Selected(ctx)
 	if err != nil && !errors.Is(err, natscontext.ErrNoneSelected) {
 		return err
@@ -701,14 +734,14 @@ func (c *ctxCommand) removeCommand(_ *fisk.ParseContext) error {
 	return c.registry().Delete(ctx, c.name)
 }
 
-func (c *ctxCommand) switchPreviousCtx(pc *fisk.ParseContext) error {
+func (c *ctxCommand) switchPreviousCtx(cmd *cobra.Command, args []string) error {
 	ctxToSwitch, err := c.registry().Previous(ctx)
 	if err != nil && !errors.Is(err, natscontext.ErrNoneSelected) {
 		return err
 	}
 
 	if ctxToSwitch == "" {
-		return c.showCommand(pc)
+		return c.showCommand(cmd, args)
 	}
 
 	_, err = c.registry().Select(ctx, ctxToSwitch)
@@ -716,10 +749,10 @@ func (c *ctxCommand) switchPreviousCtx(pc *fisk.ParseContext) error {
 		return err
 	}
 
-	return c.showCommand(pc)
+	return c.showCommand(cmd, args)
 }
 
-func (c *ctxCommand) unselectCommand(pc *fisk.ParseContext) error {
+func (c *ctxCommand) unselectCommand(_ *cobra.Command, _ []string) error {
 	current, err := c.registry().Selected(ctx)
 	if err != nil && !errors.Is(err, natscontext.ErrNoneSelected) {
 		return err
@@ -740,7 +773,9 @@ func (c *ctxCommand) unselectCommand(pc *fisk.ParseContext) error {
 	return nil
 }
 
-func (c *ctxCommand) selectCommand(pc *fisk.ParseContext) error {
+func (c *ctxCommand) selectCommand(cmd *cobra.Command, args []string) error {
+	c.name = argValue(args, 0)
+
 	known, err := c.registry().List(ctx)
 	if err != nil {
 		return err
@@ -770,5 +805,5 @@ func (c *ctxCommand) selectCommand(pc *fisk.ParseContext) error {
 		return err
 	}
 
-	return c.showCommand(pc)
+	return c.showCommand(cmd, []string{c.name})
 }

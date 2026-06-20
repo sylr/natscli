@@ -30,7 +30,7 @@ import (
 	"github.com/nats-io/nats.go"
 	histwriter "github.com/tylertreat/hdrhistogram-writer"
 
-	"github.com/choria-io/fisk"
+	"github.com/spf13/cobra"
 )
 
 type latencyCmd struct {
@@ -45,21 +45,24 @@ type latencyCmd struct {
 func configureLatencyCommand(app commandHost) {
 	c := &latencyCmd{}
 
-	latency := app.Command("latency", "Perform latency tests between two NATS servers").Alias("lat").Action(c.latencyAction)
-	latency.Tag("scope:user", "impact:rw")
+	latency := addCommand(app, "latency", "Perform latency tests between two NATS servers")
+	latency.Aliases = []string{"lat"}
+	latency.RunE = c.latencyAction
+	cmdAddTags(latency, "scope:user", "impact:rw")
 	addCheat("latency", latency)
-	latency.Flag("server-b", "The second server to subscribe on").Required().StringVar(&c.serverB)
-	latency.Flag("size", "Message size").Default("8").IntVar(&c.msgSize)
-	latency.Flag("rate", "Rate of messages per second").Default("1000").IntVar(&c.targetPubRate)
-	latency.Flag("duration", "Test duration").Default("5s").DurationVar(&c.testDuration)
-	latency.Flag("histogram", "Output file to store the histogram in").StringVar(&c.histFile)
+	latency.Flags().StringVar(&c.serverB, "server-b", "", "The second server to subscribe on")
+	_ = latency.MarkFlagRequired("server-b")
+	latency.Flags().IntVar(&c.msgSize, "size", 8, "Message size")
+	latency.Flags().IntVar(&c.targetPubRate, "rate", 1000, "Rate of messages per second")
+	latency.Flags().DurationVar(&c.testDuration, "duration", 5*time.Second, "Test duration")
+	latency.Flags().StringVar(&c.histFile, "histogram", "", "Output file to store the histogram in")
 }
 
 func init() {
 	registerCommand("latency", 11, configureLatencyCommand)
 }
 
-func (c *latencyCmd) latencyAction(_ *fisk.ParseContext) error {
+func (c *latencyCmd) latencyAction(_ *cobra.Command, _ []string) error {
 	start := time.Now()
 	c.numPubs = int(c.testDuration/time.Second) * c.targetPubRate
 

@@ -28,7 +28,7 @@ import (
 	"github.com/AlecAivazis/survey/v2"
 	ab "github.com/synadia-io/jwt-auth-builder.go"
 
-	"github.com/choria-io/fisk"
+	"github.com/spf13/cobra"
 )
 
 type authUserCommand struct {
@@ -61,75 +61,89 @@ type authUserCommand struct {
 func configureAuthUserCommand(auth commandHost) {
 	c := &authUserCommand{}
 
-	user := auth.Command("user", "Manage Account Users").Alias("u").Alias("usr").Alias("users")
+	user := addCommand(auth, "user", "Manage Account Users")
+	user.Aliases = []string{"u", "usr", "users"}
 
-	addCreateFlags := func(f *fisk.CmdClause, edit bool) {
-		f.Flag("bearer", "Enables the use of bearer tokens").BoolVar(&c.bearerAllowed)
-		f.Flag("data", "Maximum message data size to allow").Default("-1").Int64Var(&c.maxData)
-		f.Flag("locale", "Sets the locale for the user connection").StringVar(&c.userLocale)
-		f.Flag("payload", "Maximum payload size to allow").IsSetByUser(&c.maxPayloadIsSet).Default("1048576").Int64Var(&c.maxPayload)
-		f.Flag("pub-allow", "Allow publishing to a subject").StringsVar(&c.pubAllow)
-		f.Flag("pub-deny", "Deny publishing to a subject").StringsVar(&c.pubDeny)
-		f.Flag("sub-allow", "Allow subscribing to a subject").StringsVar(&c.subAllow)
-		f.Flag("sub-deny", "Deny subscribing to a subject").StringsVar(&c.subDeny)
-		f.Flag("subscriptions", "Maximum subscription count to allow").IsSetByUser(&c.maxSubsIsSet).Default("-1").Int64Var(&c.maxSubs)
-		f.Flag("tags", "Tags to assign to this User").StringsVar(&c.tags)
+	addCreateFlags := func(f *cobra.Command, edit bool) {
+		negatableBoolVar(f, &c.bearerAllowed, "bearer", false, "Enables the use of bearer tokens")
+		f.Flags().Int64Var(&c.maxData, "data", -1, "Maximum message data size to allow")
+		f.Flags().StringVar(&c.userLocale, "locale", "", "Sets the locale for the user connection")
+		f.Flags().Int64Var(&c.maxPayload, "payload", 1048576, "Maximum payload size to allow")
+		f.Flags().StringArrayVar(&c.pubAllow, "pub-allow", nil, "Allow publishing to a subject")
+		f.Flags().StringArrayVar(&c.pubDeny, "pub-deny", nil, "Deny publishing to a subject")
+		f.Flags().StringArrayVar(&c.subAllow, "sub-allow", nil, "Allow subscribing to a subject")
+		f.Flags().StringArrayVar(&c.subDeny, "sub-deny", nil, "Deny subscribing to a subject")
+		f.Flags().Int64Var(&c.maxSubs, "subscriptions", -1, "Maximum subscription count to allow")
+		f.Flags().StringArrayVar(&c.tags, "tags", nil, "Tags to assign to this User")
 		if edit {
-			f.Flag("no-tags", "Tags to remove from this User").StringsVar(&c.rmTags)
+			f.Flags().StringArrayVar(&c.rmTags, "no-tags", nil, "Tags to remove from this User")
 		}
 	}
 
-	add := user.Command("add", "Adds a new User").Alias("create").Alias("new").Action(c.addAction)
-	add.Tag("scope:system", "impact:rw")
-	add.Arg("name", "Unique name for this User").Required().StringVar(&c.userName)
-	add.Arg("account", "Account to add the user to").StringVar(&c.accountName)
-	add.Flag("key", "The public key to use when signing the user").StringVar(&c.signingKey)
-	add.Flag("operator", "Operator to add the user to").StringVar(&c.operatorName)
+	add := addCommand(user, "add", "Adds a new User")
+	add.Aliases = []string{"create", "new"}
+	add.RunE = c.addAction
+	cmdAddTags(add, "scope:system", "impact:rw")
+	addArg(add, "name", "Unique name for this User", true, "string")
+	addArg(add, "account", "Account to add the user to", false, "string")
+	add.Flags().StringVar(&c.signingKey, "key", "", "The public key to use when signing the user")
+	add.Flags().StringVar(&c.operatorName, "operator", "", "Operator to add the user to")
 	addCreateFlags(add, false)
-	add.Flag("force", "Overwrite existing files").Short('f').UnNegatableBoolVar(&c.force)
-	add.Flag("credential", "Writes credentials to a file").StringVar(&c.credFile)
-	add.Flag("defaults", "Accept default values without prompting").UnNegatableBoolVar(&c.defaults)
+	add.Flags().BoolVarP(&c.force, "force", "f", false, "Overwrite existing files")
+	add.Flags().StringVar(&c.credFile, "credential", "", "Writes credentials to a file")
+	add.Flags().BoolVar(&c.defaults, "defaults", false, "Accept default values without prompting")
 
-	info := user.Command("info", "Show User information").Alias("i").Alias("show").Alias("view").Action(c.infoAction)
-	info.Tag("scope:system", "impact:ro")
-	info.Arg("name", "Unique name for this User").StringVar(&c.userName)
-	info.Arg("account", "Account to query").StringVar(&c.accountName)
-	info.Flag("operator", "Operator holding the Account").StringVar(&c.operatorName)
-	info.Flag("json", "Produce JSON output").Short('j').UnNegatableBoolVar(&c.json)
+	info := addCommand(user, "info", "Show User information")
+	info.Aliases = []string{"i", "show", "view"}
+	info.RunE = c.infoAction
+	cmdAddTags(info, "scope:system", "impact:ro")
+	addArg(info, "name", "Unique name for this User", false, "string")
+	addArg(info, "account", "Account to query", false, "string")
+	info.Flags().StringVar(&c.operatorName, "operator", "", "Operator holding the Account")
+	info.Flags().BoolVarP(&c.json, "json", "j", false, "Produce JSON output")
 
-	edit := user.Command("edit", "Edits User settings").Alias("update").Action(c.editAction)
-	edit.Tag("scope:system", "impact:rw")
-	edit.Arg("name", "Unique name for this User").StringVar(&c.userName)
-	edit.Arg("account", "Account to query").StringVar(&c.accountName)
-	edit.Flag("operator", "Operator holding the Account").StringVar(&c.operatorName)
+	edit := addCommand(user, "edit", "Edits User settings")
+	edit.Aliases = []string{"update"}
+	edit.RunE = c.editAction
+	cmdAddTags(edit, "scope:system", "impact:rw")
+	addArg(edit, "name", "Unique name for this User", false, "string")
+	addArg(edit, "account", "Account to query", false, "string")
+	edit.Flags().StringVar(&c.operatorName, "operator", "", "Operator holding the Account")
 	addCreateFlags(edit, true)
-	edit.Flag("credential", "Writes credentials to a file").StringVar(&c.credFile)
+	edit.Flags().StringVar(&c.credFile, "credential", "", "Writes credentials to a file")
 
-	ls := user.Command("ls", "List users").Action(c.lsAction)
-	ls.Tag("scope:system", "impact:ro")
-	ls.Arg("account", "Account to query").StringVar(&c.accountName)
-	ls.Flag("operator", "Operator holding the Account").StringVar(&c.operatorName)
-	ls.Flag("names", "Show just the Account names").UnNegatableBoolVar(&c.listNames)
+	ls := addCommand(user, "ls", "List users")
+	ls.RunE = c.lsAction
+	cmdAddTags(ls, "scope:system", "impact:ro")
+	addArg(ls, "account", "Account to query", false, "string")
+	ls.Flags().StringVar(&c.operatorName, "operator", "", "Operator holding the Account")
+	ls.Flags().BoolVar(&c.listNames, "names", false, "Show just the Account names")
 
-	rm := user.Command("rm", "Removes an user").Action(c.rmAction)
-	rm.Tag("scope:system", "impact:rw")
-	rm.Arg("name", "Unique name for this User").StringVar(&c.userName)
-	rm.Arg("account", "Account to query").StringVar(&c.accountName)
-	rm.Flag("operator", "Operator holding the Account").StringVar(&c.operatorName)
-	rm.Flag("revoke", "Also revokes the user before deleting it").UnNegatableBoolVar(&c.revoke)
-	rm.Flag("force", "Removes without prompting").Short('f').UnNegatableBoolVar(&c.force)
+	rm := addCommand(user, "rm", "Removes an user")
+	rm.RunE = c.rmAction
+	cmdAddTags(rm, "scope:system", "impact:rw")
+	addArg(rm, "name", "Unique name for this User", false, "string")
+	addArg(rm, "account", "Account to query", false, "string")
+	rm.Flags().StringVar(&c.operatorName, "operator", "", "Operator holding the Account")
+	rm.Flags().BoolVar(&c.revoke, "revoke", false, "Also revokes the user before deleting it")
+	rm.Flags().BoolVarP(&c.force, "force", "f", false, "Removes without prompting")
 
-	cred := user.Command("credential", "Creates a credential file for a user").Alias("cred").Alias("creds").Action(c.credAction)
-	cred.Tag("scope:system", "impact:rw")
-	cred.Arg("file", "The file to create").Required().StringVar(&c.credFile)
-	cred.Arg("name", "User to generate a credential for").StringVar(&c.userName)
-	cred.Arg("account", "Account to query").StringVar(&c.accountName)
-	cred.Flag("expire", "Duration till expiry").DurationVar(&c.expire)
-	cred.Flag("operator", "Operator holding the Account").StringVar(&c.operatorName)
-	cred.Flag("force", "Overwrite existing files").Short('f').UnNegatableBoolVar(&c.force)
+	cred := addCommand(user, "credential", "Creates a credential file for a user")
+	cred.Aliases = []string{"cred", "creds"}
+	cred.RunE = c.credAction
+	cmdAddTags(cred, "scope:system", "impact:rw")
+	addArg(cred, "file", "The file to create", true, "string")
+	addArg(cred, "name", "User to generate a credential for", false, "string")
+	addArg(cred, "account", "Account to query", false, "string")
+	cred.Flags().DurationVar(&c.expire, "expire", 0, "Duration till expiry")
+	cred.Flags().StringVar(&c.operatorName, "operator", "", "Operator holding the Account")
+	cred.Flags().BoolVarP(&c.force, "force", "f", false, "Overwrite existing files")
 }
 
-func (c *authUserCommand) editAction(_ *fisk.ParseContext) error {
+func (c *authUserCommand) editAction(_ *cobra.Command, args []string) error {
+	c.userName = argValue(args, 0)
+	c.accountName = argValue(args, 1)
+
 	auth, _, acct, err := c.selectAccount(true)
 	if err != nil {
 		return err
@@ -167,7 +181,11 @@ func (c *authUserCommand) editAction(_ *fisk.ParseContext) error {
 	return c.fShowUser(os.Stdout, user, acct)
 }
 
-func (c *authUserCommand) credAction(_ *fisk.ParseContext) error {
+func (c *authUserCommand) credAction(_ *cobra.Command, args []string) error {
+	c.credFile = args[0]
+	c.userName = argValue(args, 1)
+	c.accountName = argValue(args, 2)
+
 	if !c.force && iu.FileExists(c.credFile) {
 		return fmt.Errorf("file %s already exist", c.credFile)
 	}
@@ -199,7 +217,10 @@ func (c *authUserCommand) credAction(_ *fisk.ParseContext) error {
 	return nil
 }
 
-func (c *authUserCommand) rmAction(_ *fisk.ParseContext) error {
+func (c *authUserCommand) rmAction(_ *cobra.Command, args []string) error {
+	c.userName = argValue(args, 0)
+	c.accountName = argValue(args, 1)
+
 	auth, _, acct, err := c.selectAccount(true)
 	if err != nil {
 		return err
@@ -251,7 +272,9 @@ func (c *authUserCommand) rmAction(_ *fisk.ParseContext) error {
 
 	return nil
 }
-func (c *authUserCommand) lsAction(_ *fisk.ParseContext) error {
+func (c *authUserCommand) lsAction(_ *cobra.Command, args []string) error {
+	c.accountName = argValue(args, 0)
+
 	_, _, acct, err := c.selectAccount(true)
 	if err != nil {
 		return err
@@ -332,7 +355,10 @@ func (c *authUserCommand) pickUser(acct ab.Account) error {
 	return nil
 }
 
-func (c *authUserCommand) infoAction(_ *fisk.ParseContext) error {
+func (c *authUserCommand) infoAction(_ *cobra.Command, args []string) error {
+	c.userName = argValue(args, 0)
+	c.accountName = argValue(args, 1)
+
 	_, _, acct, err := c.selectAccount(true)
 	if err != nil {
 		return err
@@ -353,7 +379,12 @@ func (c *authUserCommand) infoAction(_ *fisk.ParseContext) error {
 	return c.fShowUser(os.Stdout, user, acct)
 }
 
-func (c *authUserCommand) addAction(_ *fisk.ParseContext) error {
+func (c *authUserCommand) addAction(cmd *cobra.Command, args []string) error {
+	c.userName = args[0]
+	c.accountName = argValue(args, 1)
+	c.maxPayloadIsSet = cmd.Flags().Changed("payload")
+	c.maxSubsIsSet = cmd.Flags().Changed("subscriptions")
+
 	auth, _, acct, err := au.SelectOperatorAccount(c.operatorName, c.accountName, true)
 	if err != nil {
 		return err

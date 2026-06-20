@@ -24,8 +24,8 @@ import (
 	"github.com/nats-io/natscli/internal/fips"
 	iu "github.com/nats-io/natscli/internal/util"
 
-	"github.com/choria-io/fisk"
 	"github.com/nats-io/nkeys"
+	"github.com/spf13/cobra"
 )
 
 type authNKCommand struct {
@@ -43,42 +43,53 @@ type authNKCommand struct {
 func configureAuthNkeyCommand(auth commandHost) {
 	c := &authNKCommand{}
 
-	nk := auth.Command("nkey", "Create and Use NKeys").Alias("nk")
+	nk := addCommand(auth, "nkey", "Create and Use NKeys")
+	nk.Aliases = []string{"nk"}
 
-	nkGen := nk.Command("gen", "Generates NKeys").Action(c.genAction)
-	nkGen.Arg("type", "Type of key to generate").Required().EnumVar(&c.keyType, "user", "account", "server", "cluster", "operator", "curve", "x25519")
-	nkGen.Flag("public", "Output the public key").UnNegatableBoolVar(&c.pubOut)
-	nkGen.Flag("entropy", "Source of entropy eg. /dev/urandom").ExistingFileVar(&c.entropySource)
-	nkGen.Flag("output", "Write the key to a file").StringVar(&c.outFile)
+	nkGen := addCommand(nk, "gen", "Generates NKeys")
+	nkGen.RunE = c.genAction
+	addArgEnum(nkGen, "type", "Type of key to generate", true, "user", "account", "server", "cluster", "operator", "curve", "x25519")
+	nkGen.Flags().BoolVar(&c.pubOut, "public", false, "Output the public key")
+	nkGen.Flags().Var(newExistingFileValue(&c.entropySource), "entropy", "Source of entropy eg. /dev/urandom")
+	nkGen.Flags().StringVar(&c.outFile, "output", "", "Write the key to a file")
 
-	nkShow := nk.Command("show", "Show the public key").Action(c.showAction)
-	nkShow.Arg("key", "File containing NKey to act on").Required().ExistingFileVar(&c.keyFile)
+	nkShow := addCommand(nk, "show", "Show the public key")
+	nkShow.RunE = c.showAction
+	addArg(nkShow, "key", "File containing NKey to act on", true, "string")
 
-	nkSign := nk.Command("sign", "Signs data using NKeys").Action(c.signAction)
-	nkSign.Arg("file", "File to sign").Required().ExistingFileVar(&c.dataFile)
-	nkSign.Arg("key", "File containing NKey to sign with").Required().ExistingFileVar(&c.keyFile)
+	nkSign := addCommand(nk, "sign", "Signs data using NKeys")
+	nkSign.RunE = c.signAction
+	addArg(nkSign, "file", "File to sign", true, "string")
+	addArg(nkSign, "key", "File containing NKey to sign with", true, "string")
 
-	nkVerify := nk.Command("verify", "Verify signed data").Action(c.verifyAction)
-	nkVerify.Arg("file", "File containing the data to check").Required().ExistingFileVar(&c.dataFile)
-	nkVerify.Arg("signature", "File containing the signature").Required().ExistingFileVar(&c.signFile)
-	nkVerify.Arg("key", "File containing NKey to use for verification").Required().ExistingFileVar(&c.keyFile)
+	nkVerify := addCommand(nk, "verify", "Verify signed data")
+	nkVerify.RunE = c.verifyAction
+	addArg(nkVerify, "file", "File containing the data to check", true, "string")
+	addArg(nkVerify, "signature", "File containing the signature", true, "string")
+	addArg(nkVerify, "key", "File containing NKey to use for verification", true, "string")
 
-	nkSeal := nk.Command("seal", "Encrypts a file using NKeys").Alias("encrypt").Alias("enc").Action(c.sealAction)
-	nkSeal.Arg("file", "File to encrypt").Required().ExistingFileVar(&c.dataFile)
-	nkSeal.Arg("key", "File containing NKey to encrypt with").Required().ExistingFileVar(&c.keyFile)
-	nkSeal.Arg("recipient", "Public XKey of recipient").Required().StringVar(&c.counterpartKey)
-	nkSeal.Flag("output", "Write the encrypted data to a file").StringVar(&c.outFile)
-	nkSeal.Flag("b64", "Write base64 encoded data").Default("true").BoolVar(&c.useB64)
+	nkSeal := addCommand(nk, "seal", "Encrypts a file using NKeys")
+	nkSeal.Aliases = []string{"encrypt", "enc"}
+	nkSeal.RunE = c.sealAction
+	addArg(nkSeal, "file", "File to encrypt", true, "string")
+	addArg(nkSeal, "key", "File containing NKey to encrypt with", true, "string")
+	addArg(nkSeal, "recipient", "Public XKey of recipient", true, "string")
+	nkSeal.Flags().StringVar(&c.outFile, "output", "", "Write the encrypted data to a file")
+	negatableBoolVar(nkSeal, &c.useB64, "b64", true, "Write base64 encoded data")
 
-	nkOpen := nk.Command("unseal", "Decrypts a file using NKeys").Alias("open").Alias("decrypt").Alias("dec").Action(c.unsealAction)
-	nkOpen.Arg("file", "File to decrypt").Required().ExistingFileVar(&c.dataFile)
-	nkOpen.Arg("key", "File containing NKey to decrypt with").Required().ExistingFileVar(&c.keyFile)
-	nkOpen.Arg("sender", "Public XKey of sender").Required().StringVar(&c.counterpartKey)
-	nkOpen.Flag("output", "Write the decrypted data to a file").StringVar(&c.outFile)
-	nkOpen.Flag("b64", "Read data in as base64 encoded").Default("true").BoolVar(&c.useB64)
+	nkOpen := addCommand(nk, "unseal", "Decrypts a file using NKeys")
+	nkOpen.Aliases = []string{"open", "decrypt", "dec"}
+	nkOpen.RunE = c.unsealAction
+	addArg(nkOpen, "file", "File to decrypt", true, "string")
+	addArg(nkOpen, "key", "File containing NKey to decrypt with", true, "string")
+	addArg(nkOpen, "sender", "Public XKey of sender", true, "string")
+	nkOpen.Flags().StringVar(&c.outFile, "output", "", "Write the decrypted data to a file")
+	negatableBoolVar(nkOpen, &c.useB64, "b64", true, "Read data in as base64 encoded")
 }
 
-func (c *authNKCommand) showAction(_ *fisk.ParseContext) error {
+func (c *authNKCommand) showAction(_ *cobra.Command, args []string) error {
+	c.keyFile = args[0]
+
 	seed, err := iu.ReadKeyFile(c.keyFile)
 	if err != nil {
 		return err
@@ -98,7 +109,9 @@ func (c *authNKCommand) showAction(_ *fisk.ParseContext) error {
 	return nil
 }
 
-func (c *authNKCommand) genAction(_ *fisk.ParseContext) error {
+func (c *authNKCommand) genAction(_ *cobra.Command, args []string) error {
+	c.keyType = args[0]
+
 	prefix, err := c.preForType(c.keyType)
 	if err != nil {
 		return err
@@ -184,7 +197,10 @@ func (c *authNKCommand) preForType(keyType string) (nkeys.PrefixByte, error) {
 	}
 }
 
-func (c *authNKCommand) signAction(_ *fisk.ParseContext) error {
+func (c *authNKCommand) signAction(_ *cobra.Command, args []string) error {
+	c.dataFile = args[0]
+	c.keyFile = args[1]
+
 	seed, err := iu.ReadKeyFile(c.keyFile)
 	if err != nil {
 		return err
@@ -210,7 +226,11 @@ func (c *authNKCommand) signAction(_ *fisk.ParseContext) error {
 	return nil
 }
 
-func (c *authNKCommand) verifyAction(_ *fisk.ParseContext) error {
+func (c *authNKCommand) verifyAction(_ *cobra.Command, args []string) error {
+	c.dataFile = args[0]
+	c.signFile = args[1]
+	c.keyFile = args[2]
+
 	var err error
 	var kp nkeys.KeyPair
 
@@ -252,7 +272,11 @@ func (c *authNKCommand) verifyAction(_ *fisk.ParseContext) error {
 	return nil
 }
 
-func (c *authNKCommand) sealAction(_ *fisk.ParseContext) error {
+func (c *authNKCommand) sealAction(_ *cobra.Command, args []string) error {
+	c.dataFile = args[0]
+	c.keyFile = args[1]
+	c.counterpartKey = args[2]
+
 	keyData, err := iu.ReadKeyFile(c.keyFile)
 	if err != nil {
 		return err
@@ -308,7 +332,11 @@ func (c *authNKCommand) sealAction(_ *fisk.ParseContext) error {
 	return nil
 }
 
-func (c *authNKCommand) unsealAction(_ *fisk.ParseContext) error {
+func (c *authNKCommand) unsealAction(_ *cobra.Command, args []string) error {
+	c.dataFile = args[0]
+	c.keyFile = args[1]
+	c.counterpartKey = args[2]
+
 	keyData, err := iu.ReadKeyFile(c.keyFile)
 	if err != nil {
 		return err

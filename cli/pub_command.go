@@ -28,7 +28,7 @@ import (
 	"github.com/nats-io/jsm.go"
 	"github.com/nats-io/nats.go"
 
-	"github.com/choria-io/fisk"
+	"github.com/spf13/cobra"
 )
 
 type pubCmd struct {
@@ -84,29 +84,40 @@ Available template functions are:
    Random(min, max) random string at least min long, at most max
 `
 
-	pub := app.Command("publish", "Generic data publish utility").Alias("pub").Action(c.publishAction)
-	pub.Tag("scope:user", "impact:rw")
+	pub := addCommand(app, "publish", "Generic data publish utility")
+	pub.Aliases = []string{"pub"}
+	pub.RunE = c.publishAction
+	cmdAddTags(pub, "scope:user", "impact:rw")
 	addCheat("pub", pub)
-	pub.HelpLong(pubHelp)
-	pub.Arg("subject", "Subject to publish to").Required().StringVar(&c.subject)
-	pub.Arg("body", "Message body").IsSetByUser(&c.bodyIsSet).StringVar(&c.body)
-	pub.Flag("reply", "Sets a custom reply to subject").PlaceHolder("SUBJECT").StringVar(&c.replyTo)
-	pub.Flag("header", "Adds headers to the message using K:V format").PlaceHolder("K:V").Short('H').StringsVar(&c.hdrs)
-	pub.Flag("atomic", "Atomic batch publish to JetStream (implies --jetstream)").UnNegatableBoolVar(&c.atomic)
-	pub.Flag("count", "Publish multiple messages").Default("1").IntVar(&c.cnt)
-	pub.Flag("force-stdin", "Force reading from stdin").UnNegatableBoolVar(&c.forceStdin)
-	pub.Flag("jetstream", "Publish messages to JetStream").Short('J').UnNegatableBoolVar(&c.jetstream)
-	pub.Flag("quiet", "Show just the output received").Short('q').UnNegatableBoolVar(&c.quiet)
-	pub.Flag("schedule-after", "Schedule the message after a certain duration (implies --jetstream)").PlaceHolder("DURATION").IsSetByUser(&c.scheduleAfterIsSet).DurationVar(&c.scheduleAfter)
-	pub.Flag("schedule-at", "Schedule the message at a certain RFC3339 time (implies --jetstream)").PlaceHolder("TIME").StringVar(&c.scheduleAt)
-	pub.Flag("schedule-cron", "Cron definition for a scheduled message (implies --jetstream)").PlaceHolder("CRON").StringVar(&c.scheduleCron)
-	pub.Flag("schedule-dest", "Subject the message will publish to when the schedule fires (implies --jetstream)").PlaceHolder("SUBJECT").StringVar(&c.scheduleDest)
-	pub.Flag("schedule-every", "Schedules the message every interval (implies --jetstream)").PlaceHolder("DURATION").IsSetByUser(&c.scheduleEveryIsSet).DurationVar(&c.scheduleEvery)
-	pub.Flag("schedule-source", "Reads a specific subject when scheduling (implies --jetstream)").PlaceHolder("SUBJECT").StringVar(&c.scheduleSource)
-	pub.Flag("schedule-ttl", "How long generated messages should live in the stream").PlaceHolder("DURATION").DurationVar(&c.scheduleTtl)
-	pub.Flag("send-on", "When to send data from stdin: 'eof' (default) or 'newline'").Default("eof").EnumVar(&c.sendOn, "newline", "eof")
-	pub.Flag("sleep", "When publishing multiple messages, sleep between publishes").DurationVar(&c.sleep)
-	pub.Flag("templates", "Enables template functions in the body and subject (does not affect headers)").Default("true").BoolVar(&c.templates)
+	pub.Long = pubHelp
+	addArg(pub, "subject", "Subject to publish to", true, "string")
+	addArg(pub, "body", "Message body", false, "string")
+	pub.Flags().StringVar(&c.replyTo, "reply", "", "Sets a custom reply to subject")
+	flagPlaceholder(pub, "reply", "SUBJECT")
+	pub.Flags().StringArrayVarP(&c.hdrs, "header", "H", nil, "Adds headers to the message using K:V format")
+	flagPlaceholder(pub, "header", "K:V")
+	pub.Flags().BoolVar(&c.atomic, "atomic", false, "Atomic batch publish to JetStream (implies --jetstream)")
+	pub.Flags().IntVar(&c.cnt, "count", 1, "Publish multiple messages")
+	pub.Flags().BoolVar(&c.forceStdin, "force-stdin", false, "Force reading from stdin")
+	pub.Flags().BoolVarP(&c.jetstream, "jetstream", "J", false, "Publish messages to JetStream")
+	pub.Flags().BoolVarP(&c.quiet, "quiet", "q", false, "Show just the output received")
+	pub.Flags().DurationVar(&c.scheduleAfter, "schedule-after", 0, "Schedule the message after a certain duration (implies --jetstream)")
+	flagPlaceholder(pub, "schedule-after", "DURATION")
+	pub.Flags().StringVar(&c.scheduleAt, "schedule-at", "", "Schedule the message at a certain RFC3339 time (implies --jetstream)")
+	flagPlaceholder(pub, "schedule-at", "TIME")
+	pub.Flags().StringVar(&c.scheduleCron, "schedule-cron", "", "Cron definition for a scheduled message (implies --jetstream)")
+	flagPlaceholder(pub, "schedule-cron", "CRON")
+	pub.Flags().StringVar(&c.scheduleDest, "schedule-dest", "", "Subject the message will publish to when the schedule fires (implies --jetstream)")
+	flagPlaceholder(pub, "schedule-dest", "SUBJECT")
+	pub.Flags().DurationVar(&c.scheduleEvery, "schedule-every", 0, "Schedules the message every interval (implies --jetstream)")
+	flagPlaceholder(pub, "schedule-every", "DURATION")
+	pub.Flags().StringVar(&c.scheduleSource, "schedule-source", "", "Reads a specific subject when scheduling (implies --jetstream)")
+	flagPlaceholder(pub, "schedule-source", "SUBJECT")
+	pub.Flags().DurationVar(&c.scheduleTtl, "schedule-ttl", 0, "How long generated messages should live in the stream")
+	flagPlaceholder(pub, "schedule-ttl", "DURATION")
+	pub.Flags().Var(newEnumValue(&c.sendOn, "eof", "newline", "eof"), "send-on", "When to send data from stdin: 'eof' (default) or 'newline'")
+	pub.Flags().DurationVar(&c.sleep, "sleep", 0, "When publishing multiple messages, sleep between publishes")
+	negatableBoolVar(pub, &c.templates, "templates", true, "Enables template functions in the body and subject (does not affect headers)")
 }
 
 func init() {
@@ -458,7 +469,13 @@ func (c *pubCmd) publishNatsMsg(ctx context.Context, nc *nats.Conn, pub *iu.Publ
 	})
 }
 
-func (c *pubCmd) publishAction(_ *fisk.ParseContext) error {
+func (c *pubCmd) publishAction(cmd *cobra.Command, args []string) error {
+	c.subject = args[0]
+	c.body = argValue(args, 1)
+	c.bodyIsSet = len(args) > 1
+	c.scheduleAfterIsSet = cmd.Flags().Changed("schedule-after")
+	c.scheduleEveryIsSet = cmd.Flags().Changed("schedule-every")
+
 	ctx, cancel := signal.NotifyContext(ctx, syscall.SIGTERM, syscall.SIGINT, syscall.SIGQUIT)
 	defer cancel()
 

@@ -15,8 +15,9 @@ package cli
 
 import (
 	"fmt"
-	"github.com/choria-io/fisk"
+
 	"github.com/nats-io/natscli/plugins"
+	"github.com/spf13/cobra"
 )
 
 type pluginsCmd struct {
@@ -28,19 +29,24 @@ type pluginsCmd struct {
 func configurePluginCommand(app commandHost) {
 	c := &pluginsCmd{}
 
-	cmd := app.Command("plugins", "Manage plugins").Hidden()
+	cmd := addCommand(app, "plugins", "Manage plugins")
+	cmd.Hidden = true
 
-	register := cmd.Commandf("register", "Registers a new plugin").Action(c.registerAction)
-	register.Arg("name", "The top level name to register the command as").Required().StringVar(&c.name)
-	register.Arg("command", "The command the provides the plugins").Required().ExistingFileVar(&c.command)
-	register.Flag("force", "Overwrite existing plugins").UnNegatableBoolVar(&c.force)
+	register := addCommand(cmd, "register", "Registers a new plugin")
+	register.RunE = c.registerAction
+	addArg(register, "name", "The top level name to register the command as", true, "string")
+	addArg(register, "command", "The command the provides the plugins", true, "path")
+	register.Flags().BoolVar(&c.force, "force", false, "Overwrite existing plugins")
 }
 
 func init() {
 	registerCommand("plugins", 18, configurePluginCommand)
 }
 
-func (c *pluginsCmd) registerAction(_ *fisk.ParseContext) error {
+func (c *pluginsCmd) registerAction(_ *cobra.Command, args []string) error {
+	c.name = args[0]
+	c.command = args[1]
+
 	fmt.Println("WARNING: Plugins support is experimental and not officially supported")
 	fmt.Println()
 

@@ -26,7 +26,7 @@ import (
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 
-	"github.com/choria-io/fisk"
+	"github.com/spf13/cobra"
 )
 
 type eventsCmd struct {
@@ -51,20 +51,24 @@ type eventsCmd struct {
 func configureEventsCommand(app commandHost) {
 	c := &eventsCmd{}
 
-	events := app.Command("events", "Show Advisories and Events").Alias("event").Alias("e").Action(c.eventsAction)
-	events.Tag("scope:user", "impact:ro")
+	events := addCommand(app, "events", "Show Advisories and Events")
+	events.Aliases = []string{"event", "e"}
+	events.RunE = c.eventsAction
+	cmdAddTags(events, "scope:user", "impact:ro")
 	addCheat("events", events)
-	events.Flag("all", "Show all events").Short('a').UnNegatableBoolVar(&c.showAll)
-	events.Flag("json", "Produce JSON output").Short('j').UnNegatableBoolVar(&c.json)
-	events.Flag("cloudevent", "Produce CloudEvents v1 output").UnNegatableBoolVar(&c.ce)
-	events.Flag("short", "Short event format").UnNegatableBoolVar(&c.short)
-	events.Flag("filter", "Filter across the entire event using regular expressions").Default(".").StringVar(&c.bodyF)
-	events.Flag("js-metric", "Shows JetStream metric events (false)").UnNegatableBoolVar(&c.showJsMetrics)
-	events.Flag("js-advisory", "Shows advisory events (false)").UnNegatableBoolVar(&c.showJsAdvisories)
-	events.Flag("srv-advisory", "Shows NATS Server advisories (true)").Default("true").BoolVar(&c.showServerAdvisories)
-	events.Flag("subjects", "Show Advisories and Metrics received on specific subjects").PlaceHolder("SUBJECTS").StringsVar(&c.extraSubjects)
-	events.Flag("stream", "Reads events from a Stream only").StringVar(&c.stream)
-	events.Flag("since", "When reading a Stream reads from a certain duration ago").PlaceHolder("DURATION").DurationVar(&c.since)
+	events.Flags().BoolVarP(&c.showAll, "all", "a", false, "Show all events")
+	events.Flags().BoolVarP(&c.json, "json", "j", false, "Produce JSON output")
+	events.Flags().BoolVar(&c.ce, "cloudevent", false, "Produce CloudEvents v1 output")
+	events.Flags().BoolVar(&c.short, "short", false, "Short event format")
+	events.Flags().StringVar(&c.bodyF, "filter", ".", "Filter across the entire event using regular expressions")
+	events.Flags().BoolVar(&c.showJsMetrics, "js-metric", false, "Shows JetStream metric events (false)")
+	events.Flags().BoolVar(&c.showJsAdvisories, "js-advisory", false, "Shows advisory events (false)")
+	negatableBoolVar(events, &c.showServerAdvisories, "srv-advisory", true, "Shows NATS Server advisories (true)")
+	events.Flags().StringArrayVar(&c.extraSubjects, "subjects", nil, "Show Advisories and Metrics received on specific subjects")
+	flagPlaceholder(events, "subjects", "SUBJECTS")
+	events.Flags().StringVar(&c.stream, "stream", "", "Reads events from a Stream only")
+	events.Flags().DurationVar(&c.since, "since", 0, "When reading a Stream reads from a certain duration ago")
+	flagPlaceholder(events, "since", "DURATION")
 }
 
 func init() {
@@ -144,16 +148,16 @@ func (c *eventsCmd) Printf(f string, arg ...any) {
 	}
 }
 
-func (c *eventsCmd) eventsAction(_ *fisk.ParseContext) error {
+func (c *eventsCmd) eventsAction(_ *cobra.Command, _ []string) error {
 	if c.ce {
 		c.json = true
 	}
 
 	nc, _, err := prepareHelper("", natsOpts()...)
-	fisk.FatalIfError(err, "setup failed")
+	fatalIfError(err, "setup failed")
 
 	c.bodyFRe, err = regexp.Compile(strings.ToUpper(c.bodyF))
-	fisk.FatalIfError(err, "invalid body regular expression")
+	fatalIfError(err, "invalid body regular expression")
 
 	hasSubjectSelect := c.showAll || c.showJsAdvisories || c.showJsMetrics || len(c.extraSubjects) > 0
 	if !hasSubjectSelect && !c.showServerAdvisories && c.stream == "" {

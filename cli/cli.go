@@ -27,17 +27,13 @@ import (
 
 	"github.com/nats-io/natscli/options"
 
-	"github.com/choria-io/fisk"
+	"github.com/spf13/cobra"
 )
 
 type command struct {
 	Name    string
 	Order   int
 	Command func(app commandHost)
-}
-
-type commandHost interface {
-	Command(name string, help string) *fisk.CmdClause
 }
 
 // Logger provides a pluggable logger implementation
@@ -136,36 +132,60 @@ func commonConfigure(cmd commandHost, cliOpts *options.Options, disable ...strin
 }
 
 // ConfigureInCommand attaches the cli commands to cmd, prepare will load the context on demand and should be true unless override nats,
-// manager and js context is given in a custom PreAction in the caller.  Disable is a list of command names to skip.
-func ConfigureInCommand(cmd *fisk.CmdClause, cliOpts *options.Options, prepare bool, disable ...string) (*options.Options, error) {
+// manager and js context is given in a custom PersistentPreRunE in the caller.  Disable is a list of command names to skip.
+func ConfigureInCommand(cmd *cobra.Command, cliOpts *options.Options, prepare bool, disable ...string) (*options.Options, error) {
 	err := commonConfigure(cmd, cliOpts, disable...)
 	if err != nil {
 		return nil, err
 	}
 
-	if prepare {
-		cmd.PreAction(preAction)
-	}
+	chainPersistentPreRunE(cmd, prepare)
 
 	return options.DefaultOptions, nil
 }
 
 // ConfigureInApp attaches the cli commands to app, prepare will load the context on demand and should be true unless override nats,
-// manager and js context is given in a custom PreAction in the caller.  Disable is a list of command names to skip.
-func ConfigureInApp(app *fisk.Application, cliOpts *options.Options, prepare bool, disable ...string) (*options.Options, error) {
+// manager and js context is given in a custom PersistentPreRunE in the caller.  Disable is a list of command names to skip.
+func ConfigureInApp(app *cobra.Command, cliOpts *options.Options, prepare bool, disable ...string) (*options.Options, error) {
 	err := commonConfigure(app, cliOpts, disable...)
 	if err != nil {
 		return nil, err
 	}
 
-	if prepare {
-		app.PreAction(preAction)
-	}
+	chainPersistentPreRunE(app, prepare)
 
 	return options.DefaultOptions, nil
 }
 
-func preAction(_ *fisk.ParseContext) (err error) {
+// chainPersistentPreRunE installs the root pre-run hook that applies environment
+// variable backed flags and, when prepare is set, loads the NATS context. Any
+// hook already present on the command is preserved and run afterwards.
+func chainPersistentPreRunE(cmd *cobra.Command, prepare bool) {
+	// fisk ran PreActions additively (parent and child). cobra by default runs
+	// only the nearest PersistentPreRunE, which would let a subcommand's hook
+	// (e.g. server check's format parser) shadow the root context loader.
+	// Enabling traverse hooks restores the additive behaviour.
+	cobra.EnableTraverseRunHooks = true
+
+	existing := cmd.PersistentPreRunE
+	cmd.PersistentPreRunE = func(c *cobra.Command, args []string) error {
+		if err := applyEnvVars(c); err != nil {
+			return err
+		}
+		propagateNegatableChanged(c)
+		if prepare {
+			if err := preAction(); err != nil {
+				return err
+			}
+		}
+		if existing != nil {
+			return existing(c, args)
+		}
+		return nil
+	}
+}
+
+func preAction() (err error) {
 	err = loadContext(true)
 	if errors.Is(err, ErrContextNotFound) {
 		fmt.Printf("The selected context %q was not found, unselecting it\n", natscontext.SelectedContext())

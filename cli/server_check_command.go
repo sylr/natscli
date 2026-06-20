@@ -21,7 +21,7 @@ import (
 	"github.com/nats-io/jsm.go/api"
 	"github.com/nats-io/jsm.go/monitor"
 
-	"github.com/choria-io/fisk"
+	"github.com/spf13/cobra"
 )
 
 type SrvCheckCmd struct {
@@ -127,7 +127,7 @@ type SrvCheckCmd struct {
 	exporterKey         string
 }
 
-func configureServerCheckCommand(srv *fisk.CmdClause) {
+func configureServerCheckCommand(srv *cobra.Command) {
 	c := &SrvCheckCmd{
 		msgHeaders:      make(map[string]string),
 		msgHeadersMatch: make(map[string]string),
@@ -137,144 +137,189 @@ func configureServerCheckCommand(srv *fisk.CmdClause) {
 	const warnAndCritical = "You should set both warn and critical thresholds where applicable\n\n"
 	const inversion = "For most flags setting critical to a smaller value than warn will invert the check from >= to <=\n\n"
 
-	check := srv.Command("check", "Health check for NATS servers")
-	check.Flag("format", "Render the check in a specific format (nagios, json, prometheus, text)").Default("nagios").EnumVar(&checkRenderFormatText, "nagios", "json", "prometheus", "text")
-	check.Flag("namespace", "The prometheus namespace to use in output").Default(opts().PrometheusNamespace).StringVar(&opts().PrometheusNamespace)
-	check.Flag("outfile", "Save output to a file rather than STDOUT").StringVar(&checkRenderOutFile)
-	check.PreAction(c.parseRenderFormat)
+	check := addCommand(srv, "check", "Health check for NATS servers")
+	check.PersistentFlags().Var(newEnumValue(&checkRenderFormatText, "nagios", "nagios", "json", "prometheus", "text"), "format", "Render the check in a specific format (nagios, json, prometheus, text)")
+	check.PersistentFlags().StringVar(&opts().PrometheusNamespace, "namespace", opts().PrometheusNamespace, "The prometheus namespace to use in output")
+	check.PersistentFlags().StringVar(&checkRenderOutFile, "outfile", "", "Save output to a file rather than STDOUT")
+	check.PersistentPreRunE = c.parseRenderFormat
 
-	conn := check.Command("connection", "Checks basic server connection").Alias("conn").Action(c.checkConnection)
-	conn.Tag("scope:user", "impact:ro")
-	conn.HelpLong(multipleChecks + warnAndCritical)
-	conn.Flag("connect-warn", "Warning threshold to allow for establishing connections").Default("500ms").DurationVar(&c.connectWarning)
-	conn.Flag("connect-critical", "Critical threshold to allow for establishing connections").Default("1s").DurationVar(&c.connectCritical)
-	conn.Flag("rtt-warn", "Warning threshold to allow for server RTT").Default("500ms").DurationVar(&c.rttWarning)
-	conn.Flag("rtt-critical", "Critical threshold to allow for server RTT").Default("1s").DurationVar(&c.rttCritical)
-	conn.Flag("req-warn", "Warning threshold to allow for full round trip test").Default("500ms").DurationVar(&c.reqWarning)
-	conn.Flag("req-critical", "Critical threshold to allow for full round trip test").Default("1s").DurationVar(&c.reqCritical)
+	conn := addCommand(check, "connection", "Checks basic server connection")
+	conn.Aliases = []string{"conn"}
+	conn.RunE = c.checkConnection
+	cmdAddTags(conn, "scope:user", "impact:ro")
+	conn.Long = multipleChecks + warnAndCritical
+	conn.Flags().DurationVar(&c.connectWarning, "connect-warn", 500*time.Millisecond, "Warning threshold to allow for establishing connections")
+	conn.Flags().DurationVar(&c.connectCritical, "connect-critical", time.Second, "Critical threshold to allow for establishing connections")
+	conn.Flags().DurationVar(&c.rttWarning, "rtt-warn", 500*time.Millisecond, "Warning threshold to allow for server RTT")
+	conn.Flags().DurationVar(&c.rttCritical, "rtt-critical", time.Second, "Critical threshold to allow for server RTT")
+	conn.Flags().DurationVar(&c.reqWarning, "req-warn", 500*time.Millisecond, "Warning threshold to allow for full round trip test")
+	conn.Flags().DurationVar(&c.reqCritical, "req-critical", time.Second, "Critical threshold to allow for full round trip test")
 
-	stream := check.Command("stream", "Checks the health of mirrored streams, streams with sources or clustered streams").Action(c.checkStream)
-	stream.Tag("scope:user", "impact:ro")
-	stream.HelpLong(multipleChecks + warnAndCritical + inversion + `These settings can be set using Stream Metadata in the following form:
+	stream := addCommand(check, "stream", "Checks the health of mirrored streams, streams with sources or clustered streams")
+	stream.RunE = c.checkStream
+	cmdAddTags(stream, "scope:user", "impact:ro")
+	stream.Long = multipleChecks + warnAndCritical + inversion + `These settings can be set using Stream Metadata in the following form:
 
 	io.nats.monitor.lag-critical: 200
 
-When set these settings will be used, but can be overridden using --lag-critical.`)
-	stream.Flag("stream", "The streams to check").Required().StringVar(&c.sourcesStream)
-	stream.Flag("lag-critical", "Critical threshold to allow for lag on any source or mirror").PlaceHolder("MSGS").IsSetByUser(&c.sourcesLagCriticalIsSet).Uint64Var(&c.sourcesLagCritical)
-	stream.Flag("seen-critical", "Critical threshold for how long ago the source or mirror should have been seen").PlaceHolder("DURATION").IsSetByUser(&c.sourcesSeenCriticalIsSet).DurationVar(&c.sourcesSeenCritical)
-	stream.Flag("min-sources", "Minimum number of sources to expect").PlaceHolder("SOURCES").IsSetByUser(&c.sourcesMinSourcesIsSet).IntVar(&c.sourcesMinSources)
-	stream.Flag("max-sources", "Maximum number of sources to expect").PlaceHolder("SOURCES").IsSetByUser(&c.sourcesMaxSourcesIsSet).IntVar(&c.sourcesMaxSources)
-	stream.Flag("peer-expect", "Number of cluster replicas to expect").PlaceHolder("SERVERS").IsSetByUser(&c.raftExpectIsSet).IntVar(&c.raftExpect)
-	stream.Flag("peer-lag-critical", "Critical threshold to allow for cluster peer lag").PlaceHolder("OPS").IsSetByUser(&c.raftLagCriticalIsSet).Uint64Var(&c.raftLagCritical)
-	stream.Flag("peer-seen-critical", "Critical threshold for how long ago a cluster peer should have been seen").PlaceHolder("DURATION").IsSetByUser(&c.raftSeenCriticalIsSet).DurationVar(&c.raftSeenCritical)
-	stream.Flag("msgs-warn", "Warn if there are fewer than this many messages in the stream").PlaceHolder("MSGS").IsSetByUser(&c.streamMessagesWarnIsSet).Uint64Var(&c.streamMessagesWarn)
-	stream.Flag("msgs-critical", "Critical if there are fewer than this many messages in the stream").PlaceHolder("MSGS").IsSetByUser(&c.streamMessagesCritIsSet).Uint64Var(&c.streamMessagesCrit)
-	stream.Flag("subjects-warn", "Critical threshold for subjects in the stream").PlaceHolder("SUBJECTS").IsSetByUser(&c.subjectsWarnIsSet).IntVar(&c.subjectsWarn)
-	stream.Flag("subjects-critical", "Warning threshold for subjects in the stream").PlaceHolder("SUBJECTS").IsSetByUser(&c.subjectsCritIsSet).IntVar(&c.subjectsCrit)
+When set these settings will be used, but can be overridden using --lag-critical.`
+	stream.Flags().StringVar(&c.sourcesStream, "stream", "", "The streams to check")
+	_ = stream.MarkFlagRequired("stream")
+	stream.Flags().Uint64Var(&c.sourcesLagCritical, "lag-critical", 0, "Critical threshold to allow for lag on any source or mirror")
+	flagPlaceholder(stream, "lag-critical", "MSGS")
+	stream.Flags().DurationVar(&c.sourcesSeenCritical, "seen-critical", 0, "Critical threshold for how long ago the source or mirror should have been seen")
+	flagPlaceholder(stream, "seen-critical", "DURATION")
+	stream.Flags().IntVar(&c.sourcesMinSources, "min-sources", 0, "Minimum number of sources to expect")
+	flagPlaceholder(stream, "min-sources", "SOURCES")
+	stream.Flags().IntVar(&c.sourcesMaxSources, "max-sources", 0, "Maximum number of sources to expect")
+	flagPlaceholder(stream, "max-sources", "SOURCES")
+	stream.Flags().IntVar(&c.raftExpect, "peer-expect", 0, "Number of cluster replicas to expect")
+	flagPlaceholder(stream, "peer-expect", "SERVERS")
+	stream.Flags().Uint64Var(&c.raftLagCritical, "peer-lag-critical", 0, "Critical threshold to allow for cluster peer lag")
+	flagPlaceholder(stream, "peer-lag-critical", "OPS")
+	stream.Flags().DurationVar(&c.raftSeenCritical, "peer-seen-critical", 0, "Critical threshold for how long ago a cluster peer should have been seen")
+	flagPlaceholder(stream, "peer-seen-critical", "DURATION")
+	stream.Flags().Uint64Var(&c.streamMessagesWarn, "msgs-warn", 0, "Warn if there are fewer than this many messages in the stream")
+	flagPlaceholder(stream, "msgs-warn", "MSGS")
+	stream.Flags().Uint64Var(&c.streamMessagesCrit, "msgs-critical", 0, "Critical if there are fewer than this many messages in the stream")
+	flagPlaceholder(stream, "msgs-critical", "MSGS")
+	stream.Flags().IntVar(&c.subjectsWarn, "subjects-warn", 0, "Critical threshold for subjects in the stream")
+	flagPlaceholder(stream, "subjects-warn", "SUBJECTS")
+	stream.Flags().IntVar(&c.subjectsCrit, "subjects-critical", 0, "Warning threshold for subjects in the stream")
+	flagPlaceholder(stream, "subjects-critical", "SUBJECTS")
 
-	consumer := check.Command("consumer", "Checks the health of a consumer").Action(c.checkConsumer)
-	consumer.Tag("scope:user", "impact:ro")
-	consumer.HelpLong(multipleChecks + `These settings can be set using Consumer Metadata in the following form:
+	consumer := addCommand(check, "consumer", "Checks the health of a consumer")
+	consumer.RunE = c.checkConsumer
+	cmdAddTags(consumer, "scope:user", "impact:ro")
+	consumer.Long = multipleChecks + `These settings can be set using Consumer Metadata in the following form:
 
 	io.nats.monitor.waiting-critical: 20
 
-When set these settings will be used, but can be overridden using --waiting-critical.`)
-	consumer.Flag("stream", "The streams to check").Required().StringVar(&c.sourcesStream)
-	consumer.Flag("consumer", "The consumer to check").Required().StringVar(&c.consumerName)
-	consumer.Flag("outstanding-ack-critical", "Maximum number of outstanding acks to allow").Default("-1").IsSetByUser(&c.consumerAckOutstandingCriticalIsSet).IntVar(&c.consumerAckOutstandingCritical)
-	consumer.Flag("waiting-critical", "Maximum number of waiting pulls to allow").Default("-1").IsSetByUser(&c.consumerWaitingCriticalIsSet).IntVar(&c.consumerWaitingCritical)
-	consumer.Flag("unprocessed-critical", "Maximum number of unprocessed messages to allow").Default("-1").IsSetByUser(&c.consumerUnprocessedCriticalIsSet).IntVar(&c.consumerUnprocessedCritical)
-	consumer.Flag("last-delivery-critical", "Time to allow since the last delivery").Default("0s").IsSetByUser(&c.consumerLastDeliveryCriticalIsSet).DurationVar(&c.consumerLastDeliveryCritical)
-	consumer.Flag("last-ack-critical", "Time to allow since the last ack").Default("0s").IsSetByUser(&c.consumerLastAckCriticalIsSet).DurationVar(&c.consumerLastAckCritical)
-	consumer.Flag("redelivery-critical", "Maximum number of redeliveries to allow").Default("-1").IsSetByUser(&c.consumerRedeliveryCriticalIsSet).IntVar(&c.consumerRedeliveryCritical)
-	consumer.Flag("pinned", "Requires Pinned Client priority with all groups having a pinned client").UnNegatableBoolVar(&c.consumerPinned)
+When set these settings will be used, but can be overridden using --waiting-critical.`
+	consumer.Flags().StringVar(&c.sourcesStream, "stream", "", "The streams to check")
+	_ = consumer.MarkFlagRequired("stream")
+	consumer.Flags().StringVar(&c.consumerName, "consumer", "", "The consumer to check")
+	_ = consumer.MarkFlagRequired("consumer")
+	consumer.Flags().IntVar(&c.consumerAckOutstandingCritical, "outstanding-ack-critical", -1, "Maximum number of outstanding acks to allow")
+	consumer.Flags().IntVar(&c.consumerWaitingCritical, "waiting-critical", -1, "Maximum number of waiting pulls to allow")
+	consumer.Flags().IntVar(&c.consumerUnprocessedCritical, "unprocessed-critical", -1, "Maximum number of unprocessed messages to allow")
+	consumer.Flags().DurationVar(&c.consumerLastDeliveryCritical, "last-delivery-critical", 0, "Time to allow since the last delivery")
+	consumer.Flags().DurationVar(&c.consumerLastAckCritical, "last-ack-critical", 0, "Time to allow since the last ack")
+	consumer.Flags().IntVar(&c.consumerRedeliveryCritical, "redelivery-critical", -1, "Maximum number of redeliveries to allow")
+	consumer.Flags().BoolVar(&c.consumerPinned, "pinned", false, "Requires Pinned Client priority with all groups having a pinned client")
 
-	msg := check.Command("message", "Checks properties of a message stored in a stream").Action(c.checkMsg)
-	msg.Tag("scope:user", "impact:ro")
-	msg.HelpLong(multipleChecks + warnAndCritical)
-	msg.Flag("stream", "The streams to check").Required().StringVar(&c.sourcesStream)
-	msg.Flag("subject", "The subject to fetch a message from").Default(">").StringVar(&c.msgSubject)
-	msg.Flag("age-warn", "Warning threshold for message age as a duration").PlaceHolder("DURATION").DurationVar(&c.msgAgeWarn)
-	msg.Flag("age-critical", "Critical threshold for message age as a duration").PlaceHolder("DURATION").DurationVar(&c.msgAgeCrit)
-	msg.Flag("content", "Regular expression to check the content against").Default(".").RegexpVar(&c.msgRegexp)
-	msg.Flag("body-timestamp", "Use message body as a unix timestamp instead of message metadata").UnNegatableBoolVar(&c.msgBodyAsTs)
+	msg := addCommand(check, "message", "Checks properties of a message stored in a stream")
+	msg.RunE = c.checkMsg
+	cmdAddTags(msg, "scope:user", "impact:ro")
+	msg.Long = multipleChecks + warnAndCritical
+	msg.Flags().StringVar(&c.sourcesStream, "stream", "", "The streams to check")
+	_ = msg.MarkFlagRequired("stream")
+	msg.Flags().StringVar(&c.msgSubject, "subject", ">", "The subject to fetch a message from")
+	msg.Flags().DurationVar(&c.msgAgeWarn, "age-warn", 0, "Warning threshold for message age as a duration")
+	flagPlaceholder(msg, "age-warn", "DURATION")
+	msg.Flags().DurationVar(&c.msgAgeCrit, "age-critical", 0, "Critical threshold for message age as a duration")
+	flagPlaceholder(msg, "age-critical", "DURATION")
+	c.msgRegexp = regexp.MustCompile(".")
+	msg.Flags().Var(newRegexpValue(&c.msgRegexp), "content", "Regular expression to check the content against")
+	msg.Flags().BoolVar(&c.msgBodyAsTs, "body-timestamp", false, "Use message body as a unix timestamp instead of message metadata")
 
-	meta := check.Command("meta", "Check JetStream cluster state").Alias("raft").Action(c.checkRaft)
-	meta.Tag("scope:user", "impact:ro")
-	meta.HelpLong(multipleChecks)
-	meta.Flag("expect", "Number of servers to expect").Required().PlaceHolder("SERVERS").IntVar(&c.raftExpect)
-	meta.Flag("lag-critical", "Critical threshold to allow for lag").PlaceHolder("OPS").Required().Uint64Var(&c.raftLagCritical)
-	meta.Flag("seen-critical", "Critical threshold for how long ago a peer should have been seen").Required().PlaceHolder("DURATION").DurationVar(&c.raftSeenCritical)
+	meta := addCommand(check, "meta", "Check JetStream cluster state")
+	meta.Aliases = []string{"raft"}
+	meta.RunE = c.checkRaft
+	cmdAddTags(meta, "scope:user", "impact:ro")
+	meta.Long = multipleChecks
+	meta.Flags().IntVar(&c.raftExpect, "expect", 0, "Number of servers to expect")
+	_ = meta.MarkFlagRequired("expect")
+	flagPlaceholder(meta, "expect", "SERVERS")
+	meta.Flags().Uint64Var(&c.raftLagCritical, "lag-critical", 0, "Critical threshold to allow for lag")
+	flagPlaceholder(meta, "lag-critical", "OPS")
+	_ = meta.MarkFlagRequired("lag-critical")
+	meta.Flags().DurationVar(&c.raftSeenCritical, "seen-critical", 0, "Critical threshold for how long ago a peer should have been seen")
+	_ = meta.MarkFlagRequired("seen-critical")
+	flagPlaceholder(meta, "seen-critical", "DURATION")
 
-	req := check.Command("request", "Checks a request-reply service").Alias("req").Action(c.checkRequest)
-	req.Tag("scope:user", "impact:rw")
-	req.HelpLong(multipleChecks + warnAndCritical)
-	req.Flag("subject", "The subject to send the request to").Required().StringVar(&c.msgSubject)
-	req.Flag("payload", "Payload to send in the request").StringVar(&c.msgPayload)
-	req.Flag("headers", "Headers to publish in the request").StringMapVar(&c.msgHeaders)
-	req.Flag("match-payload", "Regular expression the response should match").RegexpVar(&c.msgRegexp)
-	req.Flag("match-headers", "Headers to publish in the request").StringMapVar(&c.msgHeaders)
-	req.Flag("response-critical", "Critical threshold for response time").DurationVar(&c.msgCrit)
-	req.Flag("response-warn", "Warning threshold for response time").DurationVar(&c.msgWarn)
+	req := addCommand(check, "request", "Checks a request-reply service")
+	req.Aliases = []string{"req"}
+	req.RunE = c.checkRequest
+	cmdAddTags(req, "scope:user", "impact:rw")
+	req.Long = multipleChecks + warnAndCritical
+	req.Flags().StringVar(&c.msgSubject, "subject", "", "The subject to send the request to")
+	_ = req.MarkFlagRequired("subject")
+	req.Flags().StringVar(&c.msgPayload, "payload", "", "Payload to send in the request")
+	req.Flags().Var(newStringMapValue(&c.msgHeaders), "headers", "Headers to publish in the request")
+	req.Flags().Var(newRegexpValue(&c.msgRegexp), "match-payload", "Regular expression the response should match")
+	req.Flags().Var(newStringMapValue(&c.msgHeaders), "match-headers", "Headers to publish in the request")
+	req.Flags().DurationVar(&c.msgCrit, "response-critical", 0, "Critical threshold for response time")
+	req.Flags().DurationVar(&c.msgWarn, "response-warn", 0, "Warning threshold for response time")
 
-	js := check.Command("jetstream", "Check JetStream account state").Alias("js").Action(c.checkJS)
-	js.Tag("scope:user", "impact:ro")
-	js.HelpLong(multipleChecks + warnAndCritical + inversion)
-	js.Flag("mem-warn", "Warning threshold for memory storage, in percent of limit").Default("75").IntVar(&c.jsMemWarn)
-	js.Flag("mem-critical", "Critical threshold for memory storage, in percent of limit").Default("90").IntVar(&c.jsMemCritical)
-	js.Flag("store-warn", "Warning threshold for disk storage, in percent of limit").Default("75").IntVar(&c.jsStoreWarn)
-	js.Flag("store-critical", "Critical threshold for disk storage, in percent of limit").Default("90").IntVar(&c.jsStoreCritical)
-	js.Flag("streams-warn", "Warning threshold for number of streams used, in percent of limit").Default("-1").IntVar(&c.jsStreamsWarn)
-	js.Flag("streams-critical", "Critical threshold for number of streams used, in percent of limit").Default("-1").IntVar(&c.jsStreamsCritical)
-	js.Flag("consumers-warn", "Warning threshold for number of consumers used, in percent of limit").Default("-1").IntVar(&c.jsConsumersWarn)
-	js.Flag("consumers-critical", "Critical threshold for number of consumers used, in percent of limit").Default("-1").IntVar(&c.jsConsumersCritical)
-	js.Flag("replicas", "Checks if all streams have healthy replicas").Default("true").BoolVar(&c.jsReplicas)
-	js.Flag("replica-seen-critical", "Critical threshold for when a stream replica should have been seen, as a duration").Default("5s").DurationVar(&c.jsReplicaSeenCritical)
-	js.Flag("replica-lag-critical", "Critical threshold for how many operations behind a peer can be").Default("200").Uint64Var(&c.jsReplicaLagCritical)
+	js := addCommand(check, "jetstream", "Check JetStream account state")
+	js.Aliases = []string{"js"}
+	js.RunE = c.checkJS
+	cmdAddTags(js, "scope:user", "impact:ro")
+	js.Long = multipleChecks + warnAndCritical + inversion
+	js.Flags().IntVar(&c.jsMemWarn, "mem-warn", 75, "Warning threshold for memory storage, in percent of limit")
+	js.Flags().IntVar(&c.jsMemCritical, "mem-critical", 90, "Critical threshold for memory storage, in percent of limit")
+	js.Flags().IntVar(&c.jsStoreWarn, "store-warn", 75, "Warning threshold for disk storage, in percent of limit")
+	js.Flags().IntVar(&c.jsStoreCritical, "store-critical", 90, "Critical threshold for disk storage, in percent of limit")
+	js.Flags().IntVar(&c.jsStreamsWarn, "streams-warn", -1, "Warning threshold for number of streams used, in percent of limit")
+	js.Flags().IntVar(&c.jsStreamsCritical, "streams-critical", -1, "Critical threshold for number of streams used, in percent of limit")
+	js.Flags().IntVar(&c.jsConsumersWarn, "consumers-warn", -1, "Warning threshold for number of consumers used, in percent of limit")
+	js.Flags().IntVar(&c.jsConsumersCritical, "consumers-critical", -1, "Critical threshold for number of consumers used, in percent of limit")
+	negatableBoolVar(js, &c.jsReplicas, "replicas", true, "Checks if all streams have healthy replicas")
+	js.Flags().DurationVar(&c.jsReplicaSeenCritical, "replica-seen-critical", 5*time.Second, "Critical threshold for when a stream replica should have been seen, as a duration")
+	js.Flags().Uint64Var(&c.jsReplicaLagCritical, "replica-lag-critical", 200, "Critical threshold for how many operations behind a peer can be")
 
-	serv := check.Command("server", "Checks a NATS Server health").Action(c.checkSrv)
-	serv.Tag("scope:system", "impact:ro")
-	serv.HelpLong(multipleChecks + warnAndCritical + inversion)
-	serv.Flag("name", "Server name to require in the result").Required().StringVar(&c.srvName)
-	serv.Flag("cpu-warn", "Warning threshold for CPU usage, in percent").IntVar(&c.srvCPUWarn)
-	serv.Flag("cpu-critical", "Critical threshold for CPU usage, in percent").IntVar(&c.srvCPUCrit)
-	serv.Flag("mem-warn", "Warning threshold for Memory usage, in bytes").IntVar(&c.srvMemWarn)
-	serv.Flag("mem-critical", "Critical threshold Memory CPU usage, in bytes").IntVar(&c.srvMemCrit)
-	serv.Flag("conn-warn", "Warning threshold for connections, supports inversion").IntVar(&c.srvConnWarn)
-	serv.Flag("conn-critical", "Critical threshold for connections, supports inversion").IntVar(&c.srvConnCrit)
-	serv.Flag("subs-warn", "Warning threshold for number of active subscriptions, supports inversion").IntVar(&c.srvSubsWarn)
-	serv.Flag("subs-critical", "Critical threshold for number of active subscriptions, supports inversion").IntVar(&c.srvSubCrit)
-	serv.Flag("uptime-warn", "Warning threshold for server uptime as duration").DurationVar(&c.srvUptimeWarn)
-	serv.Flag("uptime-critical", "Critical threshold for server uptime as duration").DurationVar(&c.srvUptimeCrit)
-	serv.Flag("auth-required", "Checks that authentication is enabled").UnNegatableBoolVar(&c.srvAuthRequired)
-	serv.Flag("tls-required", "Checks that TLS is required").UnNegatableBoolVar(&c.srvTLSRequired)
-	serv.Flag("js-required", "Checks that JetStream is enabled").UnNegatableBoolVar(&c.srvJSRequired)
-	serv.Flag("tls-cert-warn", "Warning threshold for TLS certificate expiry like 1d3h5m").DurationVar(&c.srvtlsExpiredWarn)
-	serv.Flag("tls-cert-crit", "Critical threshold for TLS certificate expiry like 1d3h5m").DurationVar(&c.srvtlsExpiredCrit)
+	serv := addCommand(check, "server", "Checks a NATS Server health")
+	serv.RunE = c.checkSrv
+	cmdAddTags(serv, "scope:system", "impact:ro")
+	serv.Long = multipleChecks + warnAndCritical + inversion
+	serv.Flags().StringVar(&c.srvName, "name", "", "Server name to require in the result")
+	_ = serv.MarkFlagRequired("name")
+	serv.Flags().IntVar(&c.srvCPUWarn, "cpu-warn", 0, "Warning threshold for CPU usage, in percent")
+	serv.Flags().IntVar(&c.srvCPUCrit, "cpu-critical", 0, "Critical threshold for CPU usage, in percent")
+	serv.Flags().IntVar(&c.srvMemWarn, "mem-warn", 0, "Warning threshold for Memory usage, in bytes")
+	serv.Flags().IntVar(&c.srvMemCrit, "mem-critical", 0, "Critical threshold Memory CPU usage, in bytes")
+	serv.Flags().IntVar(&c.srvConnWarn, "conn-warn", 0, "Warning threshold for connections, supports inversion")
+	serv.Flags().IntVar(&c.srvConnCrit, "conn-critical", 0, "Critical threshold for connections, supports inversion")
+	serv.Flags().IntVar(&c.srvSubsWarn, "subs-warn", 0, "Warning threshold for number of active subscriptions, supports inversion")
+	serv.Flags().IntVar(&c.srvSubCrit, "subs-critical", 0, "Critical threshold for number of active subscriptions, supports inversion")
+	serv.Flags().DurationVar(&c.srvUptimeWarn, "uptime-warn", 0, "Warning threshold for server uptime as duration")
+	serv.Flags().DurationVar(&c.srvUptimeCrit, "uptime-critical", 0, "Critical threshold for server uptime as duration")
+	serv.Flags().BoolVar(&c.srvAuthRequired, "auth-required", false, "Checks that authentication is enabled")
+	serv.Flags().BoolVar(&c.srvTLSRequired, "tls-required", false, "Checks that TLS is required")
+	serv.Flags().BoolVar(&c.srvJSRequired, "js-required", false, "Checks that JetStream is enabled")
+	serv.Flags().DurationVar(&c.srvtlsExpiredWarn, "tls-cert-warn", 0, "Warning threshold for TLS certificate expiry like 1d3h5m")
+	serv.Flags().DurationVar(&c.srvtlsExpiredCrit, "tls-cert-crit", 0, "Critical threshold for TLS certificate expiry like 1d3h5m")
 
-	kv := check.Command("kv", "Checks a NATS KV Bucket").Action(c.checkKV)
-	kv.Tag("scope:user", "impact:ro")
-	kv.HelpLong(multipleChecks + warnAndCritical + inversion)
-	kv.Flag("bucket", "Checks a specific bucket").Required().StringVar(&c.kvBucket)
-	kv.Flag("values-critical", "Critical threshold for number of values in the bucket").Default("-1").Int64Var(&c.kvValuesCrit)
-	kv.Flag("values-warn", "Warning threshold for number of values in the bucket").Default("-1").Int64Var(&c.kvValuesWarn)
-	kv.Flag("key", "Requires a key to have any non-delete value set").StringVar(&c.kvKey)
+	kv := addCommand(check, "kv", "Checks a NATS KV Bucket")
+	kv.RunE = c.checkKV
+	cmdAddTags(kv, "scope:user", "impact:ro")
+	kv.Long = multipleChecks + warnAndCritical + inversion
+	kv.Flags().StringVar(&c.kvBucket, "bucket", "", "Checks a specific bucket")
+	_ = kv.MarkFlagRequired("bucket")
+	kv.Flags().Int64Var(&c.kvValuesCrit, "values-critical", -1, "Critical threshold for number of values in the bucket")
+	kv.Flags().Int64Var(&c.kvValuesWarn, "values-warn", -1, "Warning threshold for number of values in the bucket")
+	kv.Flags().StringVar(&c.kvKey, "key", "", "Requires a key to have any non-delete value set")
 
-	cred := check.Command("credential", "Checks the validity of a NATS credential file").Action(c.checkCredentialAction)
-	cred.Tag("scope:system", "impact:ro")
-	cred.HelpLong(multipleChecks + warnAndCritical + inversion)
-	cred.Flag("credential", "The file holding the NATS credential").Required().StringVar(&c.credential)
-	cred.Flag("validity-warn", "Warning threshold for time before expiry").DurationVar(&c.credentialValidityWarn)
-	cred.Flag("validity-critical", "Critical threshold for time before expiry").DurationVar(&c.credentialValidityCrit)
-	cred.Flag("require-expiry", "Requires the credential to have expiry set").Default("true").BoolVar(&c.credentialRequiresExpire)
+	cred := addCommand(check, "credential", "Checks the validity of a NATS credential file")
+	cred.RunE = c.checkCredentialAction
+	cmdAddTags(cred, "scope:system", "impact:ro")
+	cred.Long = multipleChecks + warnAndCritical + inversion
+	cred.Flags().StringVar(&c.credential, "credential", "", "The file holding the NATS credential")
+	_ = cred.MarkFlagRequired("credential")
+	cred.Flags().DurationVar(&c.credentialValidityWarn, "validity-warn", 0, "Warning threshold for time before expiry")
+	cred.Flags().DurationVar(&c.credentialValidityCrit, "validity-critical", 0, "Critical threshold for time before expiry")
+	negatableBoolVar(cred, &c.credentialRequiresExpire, "require-expiry", true, "Requires the credential to have expiry set")
 
-	exporter := check.Command("exporter", "Prometheus exporter for server checks").Hidden().Action(c.exporterAction)
-	exporter.Tag("scope:system", "impact:rw")
-	exporter.Flag("config", "Exporter configuration").Required().ExistingFileVar(&c.exporterConfigFile)
-	exporter.Flag("port", "Port to listen on").Default("8080").IntVar(&c.exporterPort)
-	exporter.Flag("https-key", "Key for HTTPS").ExistingFileVar(&c.exporterKey)
-	exporter.Flag("https-certificate", "Certificate for HTTPS").ExistingFileVar(&c.exporterCertificate)
+	exporter := addCommand(check, "exporter", "Prometheus exporter for server checks")
+	exporter.Hidden = true
+	exporter.RunE = c.exporterAction
+	cmdAddTags(exporter, "scope:system", "impact:rw")
+	exporter.Flags().Var(newExistingFileValue(&c.exporterConfigFile), "config", "Exporter configuration")
+	_ = exporter.MarkFlagRequired("config")
+	exporter.Flags().IntVar(&c.exporterPort, "port", 8080, "Port to listen on")
+	exporter.Flags().Var(newExistingFileValue(&c.exporterKey), "https-key", "Key for HTTPS")
+	exporter.Flags().Var(newExistingFileValue(&c.exporterCertificate), "https-certificate", "Certificate for HTTPS")
 }
 
 var (
@@ -283,7 +328,7 @@ var (
 	checkRenderOutFile    = ""
 )
 
-func (c *SrvCheckCmd) parseRenderFormat(_ *fisk.ParseContext) error {
+func (c *SrvCheckCmd) parseRenderFormat(_ *cobra.Command, _ []string) error {
 	switch checkRenderFormatText {
 	case "prometheus":
 		checkRenderFormat = monitor.PrometheusFormat
@@ -296,7 +341,7 @@ func (c *SrvCheckCmd) parseRenderFormat(_ *fisk.ParseContext) error {
 	return nil
 }
 
-func (c *SrvCheckCmd) checkRequest(_ *fisk.ParseContext) error {
+func (c *SrvCheckCmd) checkRequest(_ *cobra.Command, _ []string) error {
 	check := &monitor.Result{Name: c.msgSubject, Check: "request", OutFile: checkRenderOutFile, NameSpace: opts().PrometheusNamespace, RenderFormat: checkRenderFormat, Trace: opts().Trace}
 	defer check.GenericExit()
 
@@ -326,7 +371,14 @@ func (c *SrvCheckCmd) checkRequest(_ *fisk.ParseContext) error {
 	return nil
 }
 
-func (c *SrvCheckCmd) checkConsumer(_ *fisk.ParseContext) error {
+func (c *SrvCheckCmd) checkConsumer(cmd *cobra.Command, _ []string) error {
+	c.consumerAckOutstandingCriticalIsSet = cmd.Flags().Changed("outstanding-ack-critical")
+	c.consumerWaitingCriticalIsSet = cmd.Flags().Changed("waiting-critical")
+	c.consumerUnprocessedCriticalIsSet = cmd.Flags().Changed("unprocessed-critical")
+	c.consumerLastDeliveryCriticalIsSet = cmd.Flags().Changed("last-delivery-critical")
+	c.consumerLastAckCriticalIsSet = cmd.Flags().Changed("last-ack-critical")
+	c.consumerRedeliveryCriticalIsSet = cmd.Flags().Changed("redelivery-critical")
+
 	check := &monitor.Result{Name: fmt.Sprintf("%s_%s", c.sourcesStream, c.consumerName), Check: "consumer", OutFile: checkRenderOutFile, NameSpace: opts().PrometheusNamespace, RenderFormat: checkRenderFormat, Trace: opts().Trace}
 	defer check.GenericExit()
 
@@ -373,7 +425,7 @@ func (c *SrvCheckCmd) checkConsumer(_ *fisk.ParseContext) error {
 	return nil
 }
 
-func (c *SrvCheckCmd) checkKV(_ *fisk.ParseContext) error {
+func (c *SrvCheckCmd) checkKV(_ *cobra.Command, _ []string) error {
 	check := &monitor.Result{Name: c.kvBucket, Check: "kv", OutFile: checkRenderOutFile, NameSpace: opts().PrometheusNamespace, RenderFormat: checkRenderFormat, Trace: opts().Trace}
 	defer check.GenericExit()
 
@@ -397,7 +449,7 @@ func (c *SrvCheckCmd) checkKV(_ *fisk.ParseContext) error {
 	return nil
 }
 
-func (c *SrvCheckCmd) checkSrv(_ *fisk.ParseContext) error {
+func (c *SrvCheckCmd) checkSrv(_ *cobra.Command, _ []string) error {
 	check := &monitor.Result{Name: c.srvName, Check: "server", OutFile: checkRenderOutFile, NameSpace: opts().PrometheusNamespace, RenderFormat: checkRenderFormat, Trace: opts().Trace}
 	defer check.GenericExit()
 
@@ -433,7 +485,7 @@ func (c *SrvCheckCmd) checkSrv(_ *fisk.ParseContext) error {
 	return nil
 }
 
-func (c *SrvCheckCmd) checkJS(_ *fisk.ParseContext) error {
+func (c *SrvCheckCmd) checkJS(_ *cobra.Command, _ []string) error {
 	check := &monitor.Result{Name: "JetStream", Check: "jetstream", OutFile: checkRenderOutFile, NameSpace: opts().PrometheusNamespace, RenderFormat: checkRenderFormat, Trace: opts().Trace}
 	defer check.GenericExit()
 
@@ -464,7 +516,7 @@ func (c *SrvCheckCmd) checkJS(_ *fisk.ParseContext) error {
 	return nil
 }
 
-func (c *SrvCheckCmd) checkRaft(_ *fisk.ParseContext) error {
+func (c *SrvCheckCmd) checkRaft(_ *cobra.Command, _ []string) error {
 	check := &monitor.Result{Name: "JetStream Meta Cluster", Check: "meta", OutFile: checkRenderOutFile, NameSpace: opts().PrometheusNamespace, RenderFormat: checkRenderFormat, Trace: opts().Trace}
 	defer check.GenericExit()
 
@@ -487,7 +539,19 @@ func (c *SrvCheckCmd) checkRaft(_ *fisk.ParseContext) error {
 	return nil
 }
 
-func (c *SrvCheckCmd) checkStream(_ *fisk.ParseContext) error {
+func (c *SrvCheckCmd) checkStream(cmd *cobra.Command, _ []string) error {
+	c.sourcesLagCriticalIsSet = cmd.Flags().Changed("lag-critical")
+	c.sourcesSeenCriticalIsSet = cmd.Flags().Changed("seen-critical")
+	c.sourcesMinSourcesIsSet = cmd.Flags().Changed("min-sources")
+	c.sourcesMaxSourcesIsSet = cmd.Flags().Changed("max-sources")
+	c.raftExpectIsSet = cmd.Flags().Changed("peer-expect")
+	c.raftLagCriticalIsSet = cmd.Flags().Changed("peer-lag-critical")
+	c.raftSeenCriticalIsSet = cmd.Flags().Changed("peer-seen-critical")
+	c.streamMessagesWarnIsSet = cmd.Flags().Changed("msgs-warn")
+	c.streamMessagesCritIsSet = cmd.Flags().Changed("msgs-critical")
+	c.subjectsWarnIsSet = cmd.Flags().Changed("subjects-warn")
+	c.subjectsCritIsSet = cmd.Flags().Changed("subjects-critical")
+
 	check := &monitor.Result{Name: c.sourcesStream, Check: "stream", OutFile: checkRenderOutFile, NameSpace: opts().PrometheusNamespace, RenderFormat: checkRenderFormat, Trace: opts().Trace}
 	defer check.GenericExit()
 
@@ -547,7 +611,7 @@ func (c *SrvCheckCmd) checkStream(_ *fisk.ParseContext) error {
 	return nil
 }
 
-func (c *SrvCheckCmd) checkMsg(_ *fisk.ParseContext) error {
+func (c *SrvCheckCmd) checkMsg(_ *cobra.Command, _ []string) error {
 	check := &monitor.Result{Name: "Stream Message", Check: "message", OutFile: checkRenderOutFile, NameSpace: opts().PrometheusNamespace, RenderFormat: checkRenderFormat, Trace: opts().Trace}
 	defer check.GenericExit()
 
@@ -573,7 +637,7 @@ func (c *SrvCheckCmd) checkMsg(_ *fisk.ParseContext) error {
 	return nil
 }
 
-func (c *SrvCheckCmd) checkConnection(_ *fisk.ParseContext) error {
+func (c *SrvCheckCmd) checkConnection(_ *cobra.Command, _ []string) error {
 	check := &monitor.Result{Name: "Connection", Check: "connections", OutFile: checkRenderOutFile, NameSpace: opts().PrometheusNamespace, RenderFormat: checkRenderFormat, Trace: opts().Trace}
 	defer check.GenericExit()
 
@@ -606,7 +670,7 @@ func (c *SrvCheckCmd) checkConnection(_ *fisk.ParseContext) error {
 	return nil
 }
 
-func (c *SrvCheckCmd) checkCredentialAction(_ *fisk.ParseContext) error {
+func (c *SrvCheckCmd) checkCredentialAction(_ *cobra.Command, _ []string) error {
 	check := &monitor.Result{Name: "Credential", Check: "credential", OutFile: checkRenderOutFile, NameSpace: opts().PrometheusNamespace, RenderFormat: checkRenderFormat, Trace: opts().Trace}
 	defer check.GenericExit()
 

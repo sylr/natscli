@@ -14,7 +14,8 @@
 package cli
 
 func configureServerCommand(app commandHost) {
-	srv := app.Command("server", "Server information").Alias("srv").Alias("sys").Alias("system")
+	srv := addCommand(app, "server", "Server information")
+	srv.Aliases = []string{"srv", "sys", "system"}
 	addCheat("server", srv)
 
 	configureServerAccountCommand(srv)

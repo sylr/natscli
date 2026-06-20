@@ -29,7 +29,7 @@ import (
 	iu "github.com/nats-io/natscli/internal/util"
 	terminal "golang.org/x/term"
 
-	"github.com/choria-io/fisk"
+	"github.com/spf13/cobra"
 )
 
 type SrvWatchServerCmd struct {
@@ -42,7 +42,7 @@ type SrvWatchServerCmd struct {
 	mu        sync.Mutex
 }
 
-func configureServerWatchServerCommand(watch *fisk.CmdClause) {
+func configureServerWatchServerCommand(watch commandHost) {
 	c := &SrvWatchServerCmd{
 		servers: map[string]*server.ServerStatsMsg{},
 		sortNames: map[string]string{
@@ -64,14 +64,16 @@ func configureServerWatchServerCommand(watch *fisk.CmdClause) {
 	sortKeys := iu.MapKeys(c.sortNames)
 	sort.Strings(sortKeys)
 
-	servers := watch.Command("servers", "Watch server statistics").Alias("server").Alias("srv").Action(c.serversAction)
-	servers.Tag("scope:system", "impact:ro")
-	servers.HelpLong(`This waits for regular updates that each server sends and report seen totals
+	servers := addCommand(watch, "servers", "Watch server statistics")
+	servers.Aliases = []string{"server", "srv"}
+	servers.RunE = c.serversAction
+	cmdAddTags(servers, "scope:system", "impact:ro")
+	servers.Long = `This waits for regular updates that each server sends and report seen totals
 
 Since the updates are sent on a 30 second interval this is not a point in time view.
-`)
-	servers.Flag("sort", fmt.Sprintf("Sorts by a specific property (%s)", strings.Join(sortKeys, ", "))).Default("conns").EnumVar(&c.sort, sortKeys...)
-	servers.Flag("number", "Amount of Accounts to show by the selected dimension").Default("0").Short('n').IntVar(&c.top)
+`
+	servers.Flags().Var(newEnumValue(&c.sort, "conns", sortKeys...), "sort", fmt.Sprintf("Sorts by a specific property (%s)", strings.Join(sortKeys, ", ")))
+	servers.Flags().IntVarP(&c.top, "number", "n", 0, "Amount of Accounts to show by the selected dimension")
 }
 
 func (c *SrvWatchServerCmd) updateSizes() error {
@@ -112,7 +114,7 @@ func (c *SrvWatchServerCmd) prePing(nc *nats.Conn, h nats.MsgHandler) {
 	nc.PublishMsg(msg)
 }
 
-func (c *SrvWatchServerCmd) serversAction(_ *fisk.ParseContext) error {
+func (c *SrvWatchServerCmd) serversAction(_ *cobra.Command, _ []string) error {
 	nc, _, err := prepareHelper("", natsOpts()...)
 	if err != nil {
 		return err

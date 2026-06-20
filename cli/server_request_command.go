@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"time"
 
 	"github.com/nats-io/jsm.go/serverdata"
@@ -27,7 +28,7 @@ import (
 	"github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
 
-	"github.com/choria-io/fisk"
+	"github.com/spf13/cobra"
 )
 
 type SrvRequestCmd struct {
@@ -52,6 +53,7 @@ type SrvRequestCmd struct {
 	streamLeaderOnly  bool
 	includeRaftGroups bool
 	includeAll        bool
+	ipqAll            bool
 	includeDetails    bool
 
 	detail               bool
@@ -79,119 +81,151 @@ type SrvRequestCmd struct {
 	queueFilter  string
 }
 
-func configureServerRequestCommand(srv *fisk.CmdClause) {
+func configureServerRequestCommand(srv *cobra.Command) {
 	c := &SrvRequestCmd{}
 
-	req := srv.Command("request", "Request monitoring data from a specific server").Alias("req")
-	req.Tag("scope:system", "impact:ro")
-	req.Flag("limit", "Limit the responses to a certain amount of records").Default("2048").IntVar(&c.limit)
-	req.Flag("offset", "Start at a certain record").Default("0").IntVar(&c.offset)
-	req.Flag("name", "Limit to servers matching a server name").StringVar(&c.name)
-	req.Flag("host", "Limit to servers matching a server host name").StringVar(&c.host)
-	req.Flag("cluster", "Limit to servers matching a cluster name").StringVar(&c.cluster)
-	req.Flag("tags", "Limit to servers with these configured tags").StringsVar(&c.tags)
+	req := addCommand(srv, "request", "Request monitoring data from a specific server")
+	req.Aliases = []string{"req"}
+	cmdAddTags(req, "scope:system", "impact:ro")
+	req.PersistentFlags().IntVar(&c.limit, "limit", 2048, "Limit the responses to a certain amount of records")
+	req.PersistentFlags().IntVar(&c.offset, "offset", 0, "Start at a certain record")
+	req.PersistentFlags().StringVar(&c.name, "name", "", "Limit to servers matching a server name")
+	req.PersistentFlags().StringVar(&c.host, "host", "", "Limit to servers matching a server host name")
+	req.PersistentFlags().StringVar(&c.cluster, "cluster", "", "Limit to servers matching a cluster name")
+	req.PersistentFlags().StringArrayVar(&c.tags, "tags", nil, "Limit to servers with these configured tags")
 
-	accountz := req.Command("accounts", "Show account details").Alias("accountz").Alias("acct").Action(c.accountz)
-	accountz.Tag("scope:system", "impact:ro")
-	accountz.Arg("wait", "Wait for a certain number of responses").Uint32Var(&c.waitFor)
-	accountz.Flag("account", "Retrieve information for a specific account").StringVar(&c.account)
-	accountz.Flag("archive", "Read data from an archive file").StringVar(&c.archivePath)
+	accountz := addCommand(req, "accounts", "Show account details")
+	accountz.Aliases = []string{"accountz", "acct"}
+	accountz.RunE = c.accountz
+	cmdAddTags(accountz, "scope:system", "impact:ro")
+	addArg(accountz, "wait", "Wait for a certain number of responses", false, "uint")
+	accountz.Flags().StringVar(&c.account, "account", "", "Retrieve information for a specific account")
+	accountz.Flags().StringVar(&c.archivePath, "archive", "", "Read data from an archive file")
 
-	connz := req.Command("connections", "Show connection details").Alias("conn").Alias("connz").Action(c.conns)
-	connz.Tag("scope:system", "impact:ro")
-	connz.Arg("wait", "Wait for a certain number of responses").Uint32Var(&c.waitFor)
-	connz.Flag("sort", "Sort by a specific property").Default("cid").EnumVar(&c.sortOpt, "cid", "start", "subs", "pending", "msgs_to", "msgs_from", "bytes_to", "bytes_from", "last", "idle", "uptime", "stop", "reason", "rtt")
-	connz.Flag("subscriptions", "Show subscriptions").UnNegatableBoolVar(&c.detail)
-	connz.Flag("filter-cid", "Filter on a specific CID").PlaceHolder("CID").Uint64Var(&c.cidFilter)
-	connz.Flag("filter-state", "Filter on a specific account state (open, closed, all)").Default("open").EnumVar(&c.stateFilter, "open", "closed", "all")
-	connz.Flag("filter-user", "Filter on a specific username").PlaceHolder("USER").StringVar(&c.userFilter)
-	connz.Flag("filter-account", "Filter on a specific account").PlaceHolder("ACCOUNT").StringVar(&c.accountFilter)
-	connz.Flag("filter-subject", "Limits responses only to those connections with matching subscription interest").PlaceHolder("SUBJECT").StringVar(&c.subjectFilter)
-	connz.Flag("filter-empty", "Only shows responses that have connections").Default("false").UnNegatableBoolVar(&c.filterEmpty)
-	connz.Flag("archive", "Read data from an archive file").StringVar(&c.archivePath)
+	connz := addCommand(req, "connections", "Show connection details")
+	connz.Aliases = []string{"conn", "connz"}
+	connz.RunE = c.conns
+	cmdAddTags(connz, "scope:system", "impact:ro")
+	addArg(connz, "wait", "Wait for a certain number of responses", false, "uint")
+	connz.Flags().Var(newEnumValue(&c.sortOpt, "cid", "cid", "start", "subs", "pending", "msgs_to", "msgs_from", "bytes_to", "bytes_from", "last", "idle", "uptime", "stop", "reason", "rtt"), "sort", "Sort by a specific property")
+	connz.Flags().BoolVar(&c.detail, "subscriptions", false, "Show subscriptions")
+	connz.Flags().Uint64Var(&c.cidFilter, "filter-cid", 0, "Filter on a specific CID")
+	flagPlaceholder(connz, "filter-cid", "CID")
+	connz.Flags().Var(newEnumValue(&c.stateFilter, "open", "open", "closed", "all"), "filter-state", "Filter on a specific account state (open, closed, all)")
+	connz.Flags().StringVar(&c.userFilter, "filter-user", "", "Filter on a specific username")
+	flagPlaceholder(connz, "filter-user", "USER")
+	connz.Flags().StringVar(&c.accountFilter, "filter-account", "", "Filter on a specific account")
+	flagPlaceholder(connz, "filter-account", "ACCOUNT")
+	connz.Flags().StringVar(&c.subjectFilter, "filter-subject", "", "Limits responses only to those connections with matching subscription interest")
+	flagPlaceholder(connz, "filter-subject", "SUBJECT")
+	connz.Flags().BoolVar(&c.filterEmpty, "filter-empty", false, "Only shows responses that have connections")
+	connz.Flags().StringVar(&c.archivePath, "archive", "", "Read data from an archive file")
 
-	gwyz := req.Command("gateways", "Show gateway details").Alias("gateway").Alias("gwy").Alias("gatewayz").Action(c.gwyz)
-	gwyz.Tag("scope:system", "impact:ro")
-	gwyz.Arg("wait", "Wait for a certain number of responses").Uint32Var(&c.waitFor)
-	gwyz.Arg("filter-name", "Filter results on gateway name").PlaceHolder("NAME").StringVar(&c.nameFilter)
-	gwyz.Flag("filter-account", "Show only a certain account in account detail").PlaceHolder("ACCOUNT").StringVar(&c.accountFilter)
-	gwyz.Flag("accounts", "Show account detail").UnNegatableBoolVar(&c.detail)
-	gwyz.Flag("subscriptions", "Show subscription details").Default("true").BoolVar(&c.accountSubscriptions)
-	gwyz.Flag("archive", "Read data from an archive file").StringVar(&c.archivePath)
+	gwyz := addCommand(req, "gateways", "Show gateway details")
+	gwyz.Aliases = []string{"gateway", "gwy", "gatewayz"}
+	gwyz.RunE = c.gwyz
+	cmdAddTags(gwyz, "scope:system", "impact:ro")
+	addArg(gwyz, "wait", "Wait for a certain number of responses", false, "uint")
+	addArg(gwyz, "filter-name", "Filter results on gateway name", false, "string")
+	gwyz.Flags().StringVar(&c.accountFilter, "filter-account", "", "Show only a certain account in account detail")
+	flagPlaceholder(gwyz, "filter-account", "ACCOUNT")
+	gwyz.Flags().BoolVar(&c.detail, "accounts", false, "Show account detail")
+	negatableBoolVar(gwyz, &c.accountSubscriptions, "subscriptions", true, "Show subscription details")
+	gwyz.Flags().StringVar(&c.archivePath, "archive", "", "Read data from an archive file")
 
-	ipq := req.Command("ipqueue", "Show IP Queue details").Alias("ipq").Alias("ipqueuesz").Action(c.ipqz)
-	ipq.Tag("scope:system", "impact:ro")
-	ipq.Flag("all", "Shows all available information").Default("true").BoolVar(&c.includeAll)
-	ipq.Flag("filter", "Filter results for specific queues").StringVar(&c.queueFilter)
-	ipq.Flag("archive", "Read data from an archive file").StringVar(&c.archivePath)
+	ipq := addCommand(req, "ipqueue", "Show IP Queue details")
+	ipq.Aliases = []string{"ipq", "ipqueuesz"}
+	ipq.RunE = c.ipqz
+	cmdAddTags(ipq, "scope:system", "impact:ro")
+	negatableBoolVar(ipq, &c.ipqAll, "all", true, "Shows all available information")
+	ipq.Flags().StringVar(&c.queueFilter, "filter", "", "Filter results for specific queues")
+	ipq.Flags().StringVar(&c.archivePath, "archive", "", "Read data from an archive file")
 
-	healthz := req.Command("jetstream-health", "Request JetStream health status").Alias("healthz").Action(c.healthz)
-	healthz.Tag("scope:system", "impact:ro")
-	healthz.Arg("wait", "Wait for a certain number of responses").Uint32Var(&c.waitFor)
-	healthz.Flag("js-enabled", "Checks that JetStream should be enabled on all servers").Short('J').BoolVar(&c.jsEnabled)
-	healthz.Flag("server-only", "Restricts the health check to the JetStream server only, do not check streams and consumers").Short('S').BoolVar(&c.jsServerOnly)
-	healthz.Flag("account", "Check only a specific Account").StringVar(&c.account)
-	healthz.Flag("stream", "Check only a specific Stream").StringVar(&c.stream)
-	healthz.Flag("consumer", "Check only a specific Consumer").StringVar(&c.consumer)
-	healthz.Flag("details", "Include extended details about all failures").Default("true").BoolVar(&c.includeDetails)
-	healthz.Flag("archive", "Read data from an archive file").StringVar(&c.archivePath)
+	healthz := addCommand(req, "jetstream-health", "Request JetStream health status")
+	healthz.Aliases = []string{"healthz"}
+	healthz.RunE = c.healthz
+	cmdAddTags(healthz, "scope:system", "impact:ro")
+	addArg(healthz, "wait", "Wait for a certain number of responses", false, "uint")
+	healthz.Flags().BoolVarP(&c.jsEnabled, "js-enabled", "J", false, "Checks that JetStream should be enabled on all servers")
+	healthz.Flags().BoolVarP(&c.jsServerOnly, "server-only", "S", false, "Restricts the health check to the JetStream server only, do not check streams and consumers")
+	healthz.Flags().StringVar(&c.account, "account", "", "Check only a specific Account")
+	healthz.Flags().StringVar(&c.stream, "stream", "", "Check only a specific Stream")
+	healthz.Flags().StringVar(&c.consumer, "consumer", "", "Check only a specific Consumer")
+	negatableBoolVar(healthz, &c.includeDetails, "details", true, "Include extended details about all failures")
+	healthz.Flags().StringVar(&c.archivePath, "archive", "", "Read data from an archive file")
 
-	jsz := req.Command("jetstream", "Show JetStream details").Alias("jsz").Alias("js").Action(c.jsz)
-	jsz.Tag("scope:system", "impact:ro")
-	jsz.Arg("wait", "Wait for a certain number of responses").Uint32Var(&c.waitFor)
-	jsz.Flag("account", "Show statistics scoped to a specific account").StringVar(&c.account)
-	jsz.Flag("accounts", "Include details about accounts").UnNegatableBoolVar(&c.includeAccounts)
-	jsz.Flag("streams", "Include details about Streams").UnNegatableBoolVar(&c.includeStreams)
-	jsz.Flag("consumer", "Include details about Consumers").UnNegatableBoolVar(&c.includeConsumers)
-	jsz.Flag("config", "Include details about configuration").UnNegatableBoolVar(&c.includeConfig)
-	jsz.Flag("raft", "Include details about raft groups").UnNegatableBoolVar(&c.includeRaftGroups)
-	jsz.Flag("leader", "Request a response from the Meta-group leader only").UnNegatableBoolVar(&c.leaderOnly)
-	jsz.Flag("stream-leader", "Request a response from Stream leaders only").UnNegatableBoolVar(&c.streamLeaderOnly)
-	jsz.Flag("all", "Include accounts, streams, consumers and configuration").UnNegatableBoolVar(&c.includeAll)
-	jsz.Flag("archive", "Read data from an archive file").StringVar(&c.archivePath)
+	jsz := addCommand(req, "jetstream", "Show JetStream details")
+	jsz.Aliases = []string{"jsz", "js"}
+	jsz.RunE = c.jsz
+	cmdAddTags(jsz, "scope:system", "impact:ro")
+	addArg(jsz, "wait", "Wait for a certain number of responses", false, "uint")
+	jsz.Flags().StringVar(&c.account, "account", "", "Show statistics scoped to a specific account")
+	jsz.Flags().BoolVar(&c.includeAccounts, "accounts", false, "Include details about accounts")
+	jsz.Flags().BoolVar(&c.includeStreams, "streams", false, "Include details about Streams")
+	jsz.Flags().BoolVar(&c.includeConsumers, "consumer", false, "Include details about Consumers")
+	jsz.Flags().BoolVar(&c.includeConfig, "config", false, "Include details about configuration")
+	jsz.Flags().BoolVar(&c.includeRaftGroups, "raft", false, "Include details about raft groups")
+	jsz.Flags().BoolVar(&c.leaderOnly, "leader", false, "Request a response from the Meta-group leader only")
+	jsz.Flags().BoolVar(&c.streamLeaderOnly, "stream-leader", false, "Request a response from Stream leaders only")
+	jsz.Flags().BoolVar(&c.includeAll, "all", false, "Include accounts, streams, consumers and configuration")
+	jsz.Flags().StringVar(&c.archivePath, "archive", "", "Read data from an archive file")
 
-	kick := req.Command("kick", "Disconnects a client immediately").Action(c.kick)
-	kick.Tag("scope:system", "impact:rw")
-	kick.Arg("client", "The Client ID to disconnect").Required().PlaceHolder("ID").Uint64Var(&c.cid)
-	kick.Arg("server", "The Server ID to disconnect the client from").Required().PlaceHolder("SERVER_ID").StringVar(&c.host)
+	kick := addCommand(req, "kick", "Disconnects a client immediately")
+	kick.RunE = c.kick
+	cmdAddTags(kick, "scope:system", "impact:rw")
+	addArg(kick, "client", "The Client ID to disconnect", true, "uint")
+	addArg(kick, "server", "The Server ID to disconnect the client from", true, "string")
 
-	leafz := req.Command("leafnodes", "Show leafnode details").Alias("leaf").Alias("leafz").Action(c.leafz)
-	leafz.Tag("scope:system", "impact:ro")
-	leafz.Arg("wait", "Wait for a certain number of responses").Uint32Var(&c.waitFor)
-	leafz.Flag("subscriptions", "Show subscription detail").UnNegatableBoolVar(&c.detail)
-	leafz.Flag("archive", "Read data from an archive file").StringVar(&c.archivePath)
+	leafz := addCommand(req, "leafnodes", "Show leafnode details")
+	leafz.Aliases = []string{"leaf", "leafz"}
+	leafz.RunE = c.leafz
+	cmdAddTags(leafz, "scope:system", "impact:ro")
+	addArg(leafz, "wait", "Wait for a certain number of responses", false, "uint")
+	leafz.Flags().BoolVar(&c.detail, "subscriptions", false, "Show subscription detail")
+	leafz.Flags().StringVar(&c.archivePath, "archive", "", "Read data from an archive file")
 
-	profilez := req.Command("profile", "Run a profile").Action(c.profilez)
-	profilez.Tag("scope:system", "impact:ro")
-	profilez.Arg("profile", "Specify the name of the profile to run (allocs, heap, goroutine, mutex, threadcreate, block, cpu)").Required().EnumVar(&c.profileName, "allocs", "heap", "goroutine", "mutex", "threadcreate", "block", "cpu")
-	profilez.Arg("dir", "Set the output directory for profile files").Default(".").ExistingDirVar(&c.profileDir)
-	profilez.Flag("level", "Set the debug level of the profile").IntVar(&c.profileDebug)
-	profilez.Flag("archive", "Read data from an archive file").StringVar(&c.archivePath)
+	profilez := addCommand(req, "profile", "Run a profile")
+	profilez.RunE = c.profilez
+	cmdAddTags(profilez, "scope:system", "impact:ro")
+	addArgEnum(profilez, "profile", "Specify the name of the profile to run (allocs, heap, goroutine, mutex, threadcreate, block, cpu)", true, "allocs", "heap", "goroutine", "mutex", "threadcreate", "block", "cpu")
+	addArgWithDefault(profilez, "dir", "Set the output directory for profile files", ".", "path")
+	profilez.Flags().IntVar(&c.profileDebug, "level", 0, "Set the debug level of the profile")
+	profilez.Flags().StringVar(&c.archivePath, "archive", "", "Read data from an archive file")
 
-	raftz := req.Command("raft", "Show RAFT state details").Alias("raftz").Action(c.raftz)
-	raftz.Tag("scope:system", "impact:ro")
-	raftz.Flag("account", "Filters on an specific account").StringVar(&c.account)
-	raftz.Flag("group", "Filters on a specific group").StringVar(&c.group)
-	raftz.Flag("archive", "Read data from an archive file").StringVar(&c.archivePath)
+	raftz := addCommand(req, "raft", "Show RAFT state details")
+	raftz.Aliases = []string{"raftz"}
+	raftz.RunE = c.raftz
+	cmdAddTags(raftz, "scope:system", "impact:ro")
+	raftz.Flags().StringVar(&c.account, "account", "", "Filters on an specific account")
+	raftz.Flags().StringVar(&c.group, "group", "", "Filters on a specific group")
+	raftz.Flags().StringVar(&c.archivePath, "archive", "", "Read data from an archive file")
 
-	routez := req.Command("routes", "Show route details").Alias("route").Alias("routez").Action(c.routez)
-	routez.Tag("scope:system", "impact:ro")
-	routez.Arg("wait", "Wait for a certain number of responses").Uint32Var(&c.waitFor)
-	routez.Flag("subscriptions", "Show subscription detail").UnNegatableBoolVar(&c.detail)
-	routez.Flag("archive", "Read data from an archive file").StringVar(&c.archivePath)
+	routez := addCommand(req, "routes", "Show route details")
+	routez.Aliases = []string{"route", "routez"}
+	routez.RunE = c.routez
+	cmdAddTags(routez, "scope:system", "impact:ro")
+	addArg(routez, "wait", "Wait for a certain number of responses", false, "uint")
+	routez.Flags().BoolVar(&c.detail, "subscriptions", false, "Show subscription detail")
+	routez.Flags().StringVar(&c.archivePath, "archive", "", "Read data from an archive file")
 
-	subz := req.Command("subscriptions", "Show subscription information").Alias("sub").Alias("subsz").Action(c.subs)
-	subz.Tag("scope:system", "impact:ro")
-	subz.Arg("wait", "Wait for a certain number of responses").Uint32Var(&c.waitFor)
-	subz.Flag("detail", "Include detail about all subscriptions").UnNegatableBoolVar(&c.detail)
-	subz.Flag("filter-account", "Filter on a specific account").PlaceHolder("ACCOUNT").StringVar(&c.accountFilter)
-	subz.Flag("filter-subject", "Filter based on subscriptions matching this subject").PlaceHolder("SUBJECT").StringVar(&c.subjectFilter)
-	subz.Flag("archive", "Read data from an archive file").StringVar(&c.archivePath)
+	subz := addCommand(req, "subscriptions", "Show subscription information")
+	subz.Aliases = []string{"sub", "subsz"}
+	subz.RunE = c.subs
+	cmdAddTags(subz, "scope:system", "impact:ro")
+	addArg(subz, "wait", "Wait for a certain number of responses", false, "uint")
+	subz.Flags().BoolVar(&c.detail, "detail", false, "Include detail about all subscriptions")
+	subz.Flags().StringVar(&c.accountFilter, "filter-account", "", "Filter on a specific account")
+	flagPlaceholder(subz, "filter-account", "ACCOUNT")
+	subz.Flags().StringVar(&c.subjectFilter, "filter-subject", "", "Filter based on subscriptions matching this subject")
+	flagPlaceholder(subz, "filter-subject", "SUBJECT")
+	subz.Flags().StringVar(&c.archivePath, "archive", "", "Read data from an archive file")
 
-	varz := req.Command("variables", "Show runtime variables").Alias("var").Alias("varz").Action(c.varz)
-	varz.Tag("scope:system", "impact:ro")
-	varz.Arg("wait", "Wait for a certain number of responses").Uint32Var(&c.waitFor)
-	varz.Flag("archive", "Read data from an archive file").StringVar(&c.archivePath)
+	varz := addCommand(req, "variables", "Show runtime variables")
+	varz.Aliases = []string{"var", "varz"}
+	varz.RunE = c.varz
+	cmdAddTags(varz, "scope:system", "impact:ro")
+	addArg(varz, "wait", "Wait for a certain number of responses", false, "uint")
+	varz.Flags().StringVar(&c.archivePath, "archive", "", "Read data from an archive file")
 }
 
 func (c *SrvRequestCmd) reqFilter() server.EventFilterOptions {
@@ -235,6 +269,18 @@ func (c *SrvRequestCmd) dataSource() (serverdata.Source, error) {
 	}, int(waitFor))
 }
 
+// bindWaitArg binds the optional "wait" positional argument at index idx to c.waitFor.
+func (c *SrvRequestCmd) bindWaitArg(args []string, idx int) error {
+	if v := argValue(args, idx); v != "" {
+		w, err := strconv.ParseUint(v, 10, 32)
+		if err != nil {
+			return err
+		}
+		c.waitFor = uint32(w)
+	}
+	return nil
+}
+
 func printResults[T any](results []*T) error {
 	for _, r := range results {
 		j, err := json.Marshal(r)
@@ -246,7 +292,7 @@ func printResults[T any](results []*T) error {
 	return nil
 }
 
-func (c *SrvRequestCmd) ipqz(_ *fisk.ParseContext) error {
+func (c *SrvRequestCmd) ipqz(_ *cobra.Command, _ []string) error {
 	src, err := c.dataSource()
 	if err != nil {
 		return err
@@ -255,7 +301,7 @@ func (c *SrvRequestCmd) ipqz(_ *fisk.ParseContext) error {
 
 	responses, err := src.Ipqueuesz(server.IpqueueszEventOptions{
 		IpqueueszOptions: server.IpqueueszOptions{
-			All:    c.includeAll,
+			All:    c.ipqAll,
 			Filter: c.queueFilter,
 		},
 		EventFilterOptions: c.reqFilter(),
@@ -267,7 +313,7 @@ func (c *SrvRequestCmd) ipqz(_ *fisk.ParseContext) error {
 	return printResults(responses)
 }
 
-func (c *SrvRequestCmd) raftz(_ *fisk.ParseContext) error {
+func (c *SrvRequestCmd) raftz(_ *cobra.Command, _ []string) error {
 	src, err := c.dataSource()
 	if err != nil {
 		return err
@@ -288,7 +334,14 @@ func (c *SrvRequestCmd) raftz(_ *fisk.ParseContext) error {
 	return printResults(responses)
 }
 
-func (c *SrvRequestCmd) kick(_ *fisk.ParseContext) error {
+func (c *SrvRequestCmd) kick(_ *cobra.Command, args []string) error {
+	cid, err := strconv.ParseUint(args[0], 10, 64)
+	if err != nil {
+		return err
+	}
+	c.cid = cid
+	c.host = args[1]
+
 	nc, _, err := prepareHelper("", natsOpts()...)
 	if err != nil {
 		return err
@@ -315,7 +368,13 @@ func (c *SrvRequestCmd) kick(_ *fisk.ParseContext) error {
 	return nil
 }
 
-func (c *SrvRequestCmd) profilez(_ *fisk.ParseContext) error {
+func (c *SrvRequestCmd) profilez(_ *cobra.Command, args []string) error {
+	c.profileName = args[0]
+	c.profileDir = "."
+	if v := argValue(args, 1); v != "" {
+		c.profileDir = v
+	}
+
 	reqOpts := server.ProfilezEventOptions{
 		ProfilezOptions: server.ProfilezOptions{
 			Name:  c.profileName,
@@ -387,7 +446,11 @@ func (c *SrvRequestCmd) profilezWrite(filename string, resp *serverdata.Profilez
 	return nil
 }
 
-func (c *SrvRequestCmd) healthz(_ *fisk.ParseContext) error {
+func (c *SrvRequestCmd) healthz(_ *cobra.Command, args []string) error {
+	if err := c.bindWaitArg(args, 0); err != nil {
+		return err
+	}
+
 	src, err := c.dataSource()
 	if err != nil {
 		return err
@@ -412,7 +475,11 @@ func (c *SrvRequestCmd) healthz(_ *fisk.ParseContext) error {
 	return printResults(responses)
 }
 
-func (c *SrvRequestCmd) jsz(_ *fisk.ParseContext) error {
+func (c *SrvRequestCmd) jsz(_ *cobra.Command, args []string) error {
+	if err := c.bindWaitArg(args, 0); err != nil {
+		return err
+	}
+
 	// we expect response only from the meta leader node
 	if c.leaderOnly {
 		c.waitFor = 1
@@ -459,7 +526,11 @@ func (c *SrvRequestCmd) jsz(_ *fisk.ParseContext) error {
 	return printResults(responses)
 }
 
-func (c *SrvRequestCmd) accountz(_ *fisk.ParseContext) error {
+func (c *SrvRequestCmd) accountz(_ *cobra.Command, args []string) error {
+	if err := c.bindWaitArg(args, 0); err != nil {
+		return err
+	}
+
 	src, err := c.dataSource()
 	if err != nil {
 		return err
@@ -477,7 +548,11 @@ func (c *SrvRequestCmd) accountz(_ *fisk.ParseContext) error {
 	return printResults(responses)
 }
 
-func (c *SrvRequestCmd) leafz(_ *fisk.ParseContext) error {
+func (c *SrvRequestCmd) leafz(_ *cobra.Command, args []string) error {
+	if err := c.bindWaitArg(args, 0); err != nil {
+		return err
+	}
+
 	src, err := c.dataSource()
 	if err != nil {
 		return err
@@ -495,7 +570,12 @@ func (c *SrvRequestCmd) leafz(_ *fisk.ParseContext) error {
 	return printResults(responses)
 }
 
-func (c *SrvRequestCmd) gwyz(_ *fisk.ParseContext) error {
+func (c *SrvRequestCmd) gwyz(_ *cobra.Command, args []string) error {
+	if err := c.bindWaitArg(args, 0); err != nil {
+		return err
+	}
+	c.nameFilter = argValue(args, 1)
+
 	if c.accountFilter != "" {
 		c.detail = true
 	}
@@ -528,7 +608,11 @@ func (c *SrvRequestCmd) gwyz(_ *fisk.ParseContext) error {
 	return printResults(responses)
 }
 
-func (c *SrvRequestCmd) routez(_ *fisk.ParseContext) error {
+func (c *SrvRequestCmd) routez(_ *cobra.Command, args []string) error {
+	if err := c.bindWaitArg(args, 0); err != nil {
+		return err
+	}
+
 	src, err := c.dataSource()
 	if err != nil {
 		return err
@@ -549,7 +633,11 @@ func (c *SrvRequestCmd) routez(_ *fisk.ParseContext) error {
 	return printResults(responses)
 }
 
-func (c *SrvRequestCmd) conns(_ *fisk.ParseContext) error {
+func (c *SrvRequestCmd) conns(_ *cobra.Command, args []string) error {
+	if err := c.bindWaitArg(args, 0); err != nil {
+		return err
+	}
+
 	src, err := c.dataSource()
 	if err != nil {
 		return err
@@ -601,7 +689,11 @@ func (c *SrvRequestCmd) conns(_ *fisk.ParseContext) error {
 	return nil
 }
 
-func (c *SrvRequestCmd) varz(_ *fisk.ParseContext) error {
+func (c *SrvRequestCmd) varz(_ *cobra.Command, args []string) error {
+	if err := c.bindWaitArg(args, 0); err != nil {
+		return err
+	}
+
 	src, err := c.dataSource()
 	if err != nil {
 		return err
@@ -618,7 +710,11 @@ func (c *SrvRequestCmd) varz(_ *fisk.ParseContext) error {
 	return printResults(responses)
 }
 
-func (c *SrvRequestCmd) subs(_ *fisk.ParseContext) error {
+func (c *SrvRequestCmd) subs(_ *cobra.Command, args []string) error {
+	if err := c.bindWaitArg(args, 0); err != nil {
+		return err
+	}
+
 	src, err := c.dataSource()
 	if err != nil {
 		return err

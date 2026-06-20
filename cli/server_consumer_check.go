@@ -27,7 +27,7 @@ import (
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/natscli/internal/util"
 
-	"github.com/choria-io/fisk"
+	"github.com/spf13/cobra"
 )
 
 type (
@@ -68,18 +68,20 @@ type (
 
 func configureConsumerCheckCommand(app commandHost) {
 	cc := &ConsumerCheckCmd{}
-	consumerCheck := app.Command("consumer-check", "Check and display consumer information").Action(cc.consumerCheck).Hidden()
-	consumerCheck.Tag("scope:system", "impact:ro")
-	consumerCheck.Flag("stream", "Filter results by stream").StringVar(&cc.streamName)
-	consumerCheck.Flag("consumer", "Filter results by consumer").StringVar(&cc.consumerName)
-	consumerCheck.Flag("raft-group", "Filter results by raft group").StringVar(&cc.raftGroup)
-	consumerCheck.Flag("health", "Check health from consumers").UnNegatableBoolVar(&cc.health)
-	consumerCheck.Flag("expected", "Expected number of servers").IntVar(&cc.expected)
-	consumerCheck.Flag("unsynced", "Filter results by streams that are out of sync").UnNegatableBoolVar(&cc.unsyncedFilter)
-	consumerCheck.Flag("stdin", "Process the result of 'nats server request jsz --all --config' from STDIN").UnNegatableBoolVar(&cc.stdin)
-	consumerCheck.Flag("read-timeout", "Read timeout in seconds").Default("5").IntVar(&cc.readTimeout)
-	consumerCheck.Flag("csv", "Renders CSV format").UnNegatableBoolVar(&cc.csv)
-	consumerCheck.Flag("archive", "Read data from an archive file").StringVar(&cc.archivePath)
+	consumerCheck := addCommand(app, "consumer-check", "Check and display consumer information")
+	consumerCheck.RunE = cc.consumerCheck
+	consumerCheck.Hidden = true
+	cmdAddTags(consumerCheck, "scope:system", "impact:ro")
+	consumerCheck.Flags().StringVar(&cc.streamName, "stream", "", "Filter results by stream")
+	consumerCheck.Flags().StringVar(&cc.consumerName, "consumer", "", "Filter results by consumer")
+	consumerCheck.Flags().StringVar(&cc.raftGroup, "raft-group", "", "Filter results by raft group")
+	consumerCheck.Flags().BoolVar(&cc.health, "health", false, "Check health from consumers")
+	consumerCheck.Flags().IntVar(&cc.expected, "expected", 0, "Expected number of servers")
+	consumerCheck.Flags().BoolVar(&cc.unsyncedFilter, "unsynced", false, "Filter results by streams that are out of sync")
+	consumerCheck.Flags().BoolVar(&cc.stdin, "stdin", false, "Process the result of 'nats server request jsz --all --config' from STDIN")
+	consumerCheck.Flags().IntVar(&cc.readTimeout, "read-timeout", 5, "Read timeout in seconds")
+	consumerCheck.Flags().BoolVar(&cc.csv, "csv", false, "Renders CSV format")
+	consumerCheck.Flags().StringVar(&cc.archivePath, "archive", "", "Read data from an archive file")
 }
 
 func (c *ConsumerCheckCmd) dataSource(nc *nats.Conn) (serverdata.Source, error) {
@@ -96,7 +98,7 @@ func (c *ConsumerCheckCmd) dataSource(nc *nats.Conn) (serverdata.Source, error) 
 	return serverdata.NewLive(nc, reqFn, c.expected)
 }
 
-func (c *ConsumerCheckCmd) consumerCheck(_ *fisk.ParseContext) error {
+func (c *ConsumerCheckCmd) consumerCheck(_ *cobra.Command, _ []string) error {
 	if c.health && c.archivePath != "" {
 		return fmt.Errorf("--health requires a live server connection")
 	}

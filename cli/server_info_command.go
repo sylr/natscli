@@ -21,11 +21,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/choria-io/fisk"
 	"github.com/dustin/go-humanize"
 	"github.com/nats-io/jsm.go/api/server/zmonitor"
 	"github.com/nats-io/jsm.go/serverdata"
 	"github.com/nats-io/nats-server/v2/server"
+	"github.com/spf13/cobra"
 )
 
 type SrvInfoCmd struct {
@@ -33,16 +33,20 @@ type SrvInfoCmd struct {
 	archivePath string
 }
 
-func configureServerInfoCommand(srv *fisk.CmdClause) {
+func configureServerInfoCommand(srv commandHost) {
 	c := &SrvInfoCmd{}
 
-	info := srv.Command("info", "Show information about a single server").Alias("i").Action(c.info)
-	info.Tag("scope:system", "impact:ro")
-	info.Arg("server", "Server ID or Name to inspect").StringVar(&c.id)
-	info.Flag("archive", "Read data from an archive file").StringVar(&c.archivePath)
+	info := addCommand(srv, "info", "Show information about a single server")
+	info.Aliases = []string{"i"}
+	info.RunE = c.info
+	cmdAddTags(info, "scope:system", "impact:ro")
+	addArg(info, "server", "Server ID or Name to inspect", false, "string")
+	info.Flags().StringVar(&c.archivePath, "archive", "", "Read data from an archive file")
 }
 
-func (c *SrvInfoCmd) info(_ *fisk.ParseContext) error {
+func (c *SrvInfoCmd) info(_ *cobra.Command, args []string) error {
+	c.id = argValue(args, 0)
+
 	var data []byte
 	var err error
 

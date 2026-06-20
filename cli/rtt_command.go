@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"net"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -25,7 +26,7 @@ import (
 
 	"github.com/nats-io/nats.go"
 
-	"github.com/choria-io/fisk"
+	"github.com/spf13/cobra"
 )
 
 type rttCmd struct {
@@ -49,17 +50,28 @@ type rttTarget struct {
 func configureRTTCommand(app commandHost) {
 	c := &rttCmd{}
 
-	rtt := app.Command("rtt", "Compute round-trip time to NATS server").Action(c.rtt)
-	rtt.Tag("scope:user", "impact:rw")
-	rtt.Arg("iterations", "How many round trips to do when testing").Default("5").IntVar(&c.iterations)
-	rtt.Flag("json", "Produce JSON output").Short('j').UnNegatableBoolVar(&c.json)
+	rtt := addCommand(app, "rtt", "Compute round-trip time to NATS server")
+	rtt.RunE = c.rtt
+	cmdAddTags(rtt, "scope:user", "impact:rw")
+	addArgWithDefault(rtt, "iterations", "How many round trips to do when testing", "5", "int")
+	rtt.Flags().BoolVarP(&c.json, "json", "j", false, "Produce JSON output")
 }
 
 func init() {
 	registerCommand("rtt", 13, configureRTTCommand)
 }
 
-func (c *rttCmd) rtt(_ *fisk.ParseContext) error {
+func (c *rttCmd) rtt(_ *cobra.Command, args []string) error {
+	if v := argValue(args, 0); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			return fmt.Errorf("invalid iterations %q: %v", v, err)
+		}
+		c.iterations = n
+	} else {
+		c.iterations = 5
+	}
+
 	targets, err := c.targets()
 	if err != nil {
 		return err
