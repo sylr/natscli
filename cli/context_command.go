@@ -483,6 +483,37 @@ func (c *ctxCommand) listCommand(_ *cobra.Command, _ []string) error {
 	return nil
 }
 
+// formatAWSConfigStep renders one step of a context's oidc.aws_config
+// assume-role chain for display, masking the secret material.
+func formatAWSConfigStep(s natscontext.AWSConfigStep) string {
+	var parts []string
+
+	addIf := func(label, value string) {
+		if value != "" {
+			parts = append(parts, fmt.Sprintf("%s=%s", label, value))
+		}
+	}
+
+	addIf("profile", s.Profile)
+	addIf("region", s.Region)
+	addIf("role_arn", s.RoleARN)
+	addIf("session_name", s.SessionName)
+	addIf("duration", s.Duration)
+	addIf("access_key_id", s.AccessKeyID)
+	if s.SecretAccessKey != "" {
+		parts = append(parts, "secret_access_key="+strings.Repeat("*", len(s.SecretAccessKey)))
+	}
+	if s.SessionToken != "" {
+		parts = append(parts, "session_token="+strings.Repeat("*", len(s.SessionToken)))
+	}
+
+	if len(parts) == 0 {
+		return "default credential chain"
+	}
+
+	return strings.Join(parts, ", ")
+}
+
 func (c *ctxCommand) showCommand(_ *cobra.Command, args []string) error {
 	c.name = argValue(args, 0)
 
@@ -589,6 +620,26 @@ func (c *ctxCommand) showCommand(_ *cobra.Command, args []string) error {
 	cols.AddRowIfNotEmpty("Inbox Prefix", cfg.InboxPrefix())
 	cols.AddRowIfNotEmpty("Path", cfg.Path())
 	cols.AddRowIfNotEmpty("Color Scheme", cfg.ColorScheme())
+
+	if oidc := cfg.OIDC(); oidc != nil {
+		cols.AddSectionTitle("OIDC Auth Callout")
+		cols.AddRowIfNotEmpty("Audience", oidc.Audience)
+		cols.AddRowIfNotEmpty("Signing Algorithm", oidc.SigningAlgorithm)
+		cols.AddRowIfNotEmpty("Token Duration", oidc.Duration)
+		cols.AddRowIfNotEmpty("Cache Path", oidc.CachePath)
+		cols.AddRowIfNotEmpty("Cache Refresh Before", oidc.CacheRefreshBefore)
+
+		switch steps := oidc.AWSConfig; {
+		case steps == nil:
+			cols.AddRow("AWS Config", color.RedString("not configured"))
+		case len(steps) == 0:
+			cols.AddRow("AWS Config", "default credential chain")
+		default:
+			for i, step := range steps {
+				cols.AddRow(fmt.Sprintf("AWS Step %d", i+1), formatAWSConfigStep(step))
+			}
+		}
+	}
 
 	checkConn := func() error {
 		opts, err := cfg.NATSOptions()

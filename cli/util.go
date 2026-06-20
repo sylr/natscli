@@ -15,6 +15,7 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -38,6 +39,7 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 	iu "github.com/nats-io/natscli/internal/util"
 	"github.com/nats-io/natscli/options"
+	"github.com/sylr/nats-oidc-callout/lib/awsauth"
 )
 
 var ErrContextNotFound = errors.New("context not found")
@@ -228,6 +230,10 @@ func natsOpts() []nats.Option {
 	if opts().Config != nil {
 		copts, err = opts().Config.NATSOptions()
 		fatalIfError(err, "configuration error")
+
+		if oidc := opts().Config.OIDC(); oidc != nil {
+			copts = append(copts, oidcWebIdentityOption(opts().Config, oidc))
+		}
 	}
 
 	connectionName := strings.TrimSpace(opts().ConnectionName)
@@ -285,6 +291,37 @@ func natsOpts() []nats.Option {
 			}
 		}),
 	}...)
+}
+
+// oidcWebIdentityOption builds a nats.Option that authenticates using an AWS web
+// identity (OIDC) token, for connecting to a NATS server fronted by an OIDC auth
+// callout service (see github.com/sylr/nats-oidc-callout). The configuration is
+// taken from the active context's oidc section: the AWS credential chain is
+// folded into an aws.Config which, with the remaining oidc fields, drives the
+// awsauth token source so a fresh STS web identity token is minted on every
+// (re)connect. The reconnect/IgnoreAuthErrorAbort settings configured in
+// natsOpts keep long-lived connections alive as the short-lived tokens (and the
+// user JWTs derived from them) expire.
+func oidcWebIdentityOption(cfg *natscontext.Context, oidc *natscontext.OIDC) nats.Option {
+	awsCfg, err := cfg.AWSConfig(context.Background())
+	fatalIfError(err, "could not build AWS configuration from context oidc section")
+
+	duration, err := oidc.ParsedDuration()
+	fatalIfError(err, "invalid oidc token duration")
+
+	refresh, err := oidc.ParsedCacheRefreshBefore()
+	fatalIfError(err, "invalid oidc cache refresh window")
+
+	ts, err := awsauth.NewFromAWSConfig(awsCfg, awsauth.Config{
+		Audience:           oidc.Audience,
+		SigningAlgorithm:   oidc.SigningAlgorithm,
+		Duration:           duration,
+		CachePath:          oidc.CachePath,
+		CacheRefreshBefore: refresh,
+	})
+	fatalIfError(err, "could not configure AWS web identity authentication")
+
+	return ts.NATSOption(opts().Timeout)
 }
 
 // for new jetstream package
