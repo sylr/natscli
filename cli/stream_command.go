@@ -3524,6 +3524,12 @@ func (c *streamCmd) lsNames(mgr *jsm.Manager, filter *jsm.StreamNamesFilter) err
 		return err
 	}
 
+	// An unfiltered listing is the complete set, so use it to refresh the
+	// shell-completion cache.
+	if filter == nil {
+		refreshStreamCompletionCache(names)
+	}
+
 	if c.json {
 		err = iu.PrintJSON(names)
 		fatalIfError(err, "could not display Streams")
@@ -3566,6 +3572,17 @@ func (c *streamCmd) lsAction(_ *cobra.Command, _ []string) error {
 	})
 	if err != nil {
 		return fmt.Errorf("could not list streams: %s", err)
+	}
+
+	// An unfiltered listing is the complete set, so use it to refresh the
+	// shell-completion cache, including streams that are present but unloadable.
+	if filter == nil {
+		cached := append([]string{}, names...)
+		cached = append(cached, missing...)
+		for name := range offline {
+			cached = append(cached, name)
+		}
+		refreshStreamCompletionCache(cached)
 	}
 
 	if c.json {

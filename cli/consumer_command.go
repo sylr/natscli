@@ -1161,6 +1161,9 @@ func (c *consumerCmd) lsAction(_ *cobra.Command, args []string) error {
 	consumerNames, err := stream.ConsumerNames()
 	fatalIfError(err, "could not load Consumers")
 
+	// Refresh the shell-completion cache with this stream's consumers.
+	refreshConsumerCompletionCache(stream.Name(), consumerNames)
+
 	if c.json {
 		err = iu.PrintJSON(consumerNames)
 		fatalIfError(err, "could not display Consumers")

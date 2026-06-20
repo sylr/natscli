@@ -89,6 +89,26 @@ func XdgShareHome() (string, error) {
 	return filepath.Join(u.HomeDir, ".local", "share"), nil
 }
 
+// XdgCacheHome is where to store cache data such as shell-completion lookups.
+// It honours XDG_CACHE_HOME and otherwise falls back to ~/.cache.
+func XdgCacheHome() (string, error) {
+	parent := os.Getenv("XDG_CACHE_HOME")
+	if parent != "" {
+		return parent, nil
+	}
+
+	u, err := user.Current()
+	if err != nil {
+		return "", err
+	}
+
+	if u.HomeDir == "" {
+		return "", fmt.Errorf("cannot determine home directory")
+	}
+
+	return filepath.Join(u.HomeDir, ".cache"), nil
+}
+
 // ConfigDir is the directory holding configuration files
 func ConfigDir() (string, error) {
 	parent, err := ParentDir()

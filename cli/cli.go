@@ -128,6 +128,10 @@ func commonConfigure(cmd commandHost, cliOpts *options.Options, disable ...strin
 		}
 	}
 
+	// Attach stream-name completion to every --stream flag now that the full
+	// command tree (and its flags) has been built.
+	registerFlagCompletions(cmd)
+
 	return nil
 }
 

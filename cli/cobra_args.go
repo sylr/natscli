@@ -32,6 +32,8 @@ type argMeta struct {
 	required   bool
 	cumulative bool
 	enum       []string
+	// complete, when set, provides shell completion for this positional argument.
+	complete func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective)
 }
 
 // commandArgsMeta records positional argument metadata per command. Commands are
@@ -64,9 +66,53 @@ func registerArg(cmd *cobra.Command, m argMeta) {
 	if m.typeHint == "" {
 		m.typeHint = "string"
 	}
+
+	// Auto-attach shell completion for the well-known JetStream argument names.
+	switch m.name {
+	case "stream":
+		m.complete = completeStreamNames
+	case "consumer":
+		m.complete = completeConsumerNames
+	}
+
 	metas := append(commandArgsMeta[cmd], m)
 	commandArgsMeta[cmd] = metas
 	cmd.Args = makeArgsValidator(metas)
+	installArgCompletion(cmd, metas)
+}
+
+// installArgCompletion sets a ValidArgsFunction that dispatches to the per-arg
+// completion function based on the positional index being completed. It is only
+// installed when at least one argument is completable, so commands without
+// completable positionals keep cobra's default (file) completion.
+func installArgCompletion(cmd *cobra.Command, metas []argMeta) {
+	completable := false
+	for _, m := range metas {
+		if m.complete != nil {
+			completable = true
+			break
+		}
+	}
+	if !completable {
+		return
+	}
+
+	cmd.ValidArgsFunction = func(c *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+		current := commandArgs(c)
+		idx := len(args)
+
+		// A trailing cumulative argument keeps completing every extra value.
+		if n := len(current); n > 0 && idx >= n && current[n-1].cumulative {
+			idx = n - 1
+		}
+
+		if idx < len(current) && current[idx].complete != nil {
+			return current[idx].complete(c, args, toComplete)
+		}
+
+		// Fall back to the shell's default (file) completion for other args.
+		return nil, cobra.ShellCompDirectiveDefault
+	}
 }
 
 func commandArgs(cmd *cobra.Command) []argMeta { return commandArgsMeta[cmd] }
