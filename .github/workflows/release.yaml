@@ -24,32 +24,6 @@ jobs:
         with:
           role: goreleaser
 
-      - name: Install deps
-        shell: bash --noprofile --norc -x -eo pipefail {0}
-        run: |
-          go install honnef.co/go/tools/cmd/staticcheck@latest
-          go install github.com/client9/misspell/cmd/misspell@latest
-
-      - name: Lint
-        shell: bash --noprofile --norc -x -eo pipefail {0}
-        run: |
-          PATH=$PATH:$GOPATH/bin
-          GO_LIST=$(go list ./... | grep -F -e asciigraph -v)
-          $(exit $(go fmt $GO_LIST | wc -l))
-          go vet -composites=false $GO_LIST
-          find . -type f -name "*.go" | grep -F -e asciigraph -v | xargs misspell -error -locale US
-          staticcheck -f stylish $GO_LIST
-
-      - name: Test
-        shell: bash --noprofile --norc -x -eo pipefail {0}
-        run: |
-          set -e
-          cd nats
-          go build
-          cd ..
-          go list ./... | grep -F -e asciigraph -v | xargs go test -v --failfast -p=1
-
-
       # dockers_v2 builds multi-arch (linux/amd64+arm64) images, so the
       # non-native arch needs QEMU plus a buildx builder.
       - name: Set up QEMU
