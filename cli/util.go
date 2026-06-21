@@ -321,7 +321,46 @@ func oidcWebIdentityOption(cfg *natscontext.Context, oidc *natscontext.OIDC) nat
 	})
 	fatalIfError(err, "could not configure AWS web identity authentication")
 
+	// Remember the token source so the connect path can surface a mint failure:
+	// nats.TokenHandler is func() string and cannot return an error, so a failed
+	// mint connects with an empty token and the real cause (e.g. an STS
+	// AccessDenied) is only recoverable via ts.LastError(). See surfaceOIDCError.
+	oidcTokenSource = ts
+
 	return ts.NATSOption(opts().Timeout)
+}
+
+// oidcTokenSource holds the awsauth token source for the active OIDC context (if
+// any) so surfaceOIDCError can report a token mint failure that nats.TokenHandler
+// swallowed. Set by oidcWebIdentityOption; nil when the context has no oidc section.
+var oidcTokenSource *awsauth.TokenSource
+
+// surfaceOIDCError augments a connect result with the OIDC web identity token
+// mint error that nats.TokenHandler could not propagate. A mint failure yields
+// an empty token, after which the callout either rejects auth (err != nil) or
+// admits a degraded, non-authenticated connection (err == nil); in both cases
+// the underlying STS error is otherwise invisible. With no OIDC context, or when
+// the last mint succeeded, the result is returned unchanged.
+func surfaceOIDCError(nc *nats.Conn, err error) (*nats.Conn, error) {
+	if oidcTokenSource == nil {
+		return nc, err
+	}
+
+	mintErr := oidcTokenSource.LastError()
+	if mintErr == nil {
+		return nc, err
+	}
+
+	if err != nil {
+		return nc, fmt.Errorf("OIDC web identity token could not be minted: %w", mintErr)
+	}
+
+	// Connected with an empty token: authenticated as a fallback identity rather
+	// than the intended one, so requests that need the real identity (e.g. system
+	// account access) fail in confusing ways. Warn loudly.
+	log.Printf("WARNING: OIDC web identity token could not be minted; connected without it as a fallback identity: %v", mintErr)
+
+	return nc, err
 }
 
 // for new jetstream package
@@ -426,7 +465,7 @@ func newNatsConnUnlocked(servers string, copts ...nats.Option) (*nats.Conn, erro
 
 	opts.Conn, err = nats.Connect(servers, copts...)
 
-	return opts.Conn, err
+	return surfaceOIDCError(opts.Conn, err)
 }
 
 func newNatsConn(servers string, copts ...nats.Option) (*nats.Conn, error) {
