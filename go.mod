@@ -96,4 +96,4 @@ require (
 	google.golang.org/protobuf v1.36.11 // indirect
 )
 
-replace github.com/nats-io/jsm.go => github.com/sylr/jsm.go v0.0.0-20260620201548-927abd5cc6ce
+replace github.com/nats-io/jsm.go => github.com/sylr/jsm.go v0.0.0-20260621134548-fb8441405179

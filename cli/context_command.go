@@ -626,8 +626,14 @@ func (c *ctxCommand) showCommand(_ *cobra.Command, args []string) error {
 		cols.AddRowIfNotEmpty("Audience", oidc.Audience)
 		cols.AddRowIfNotEmpty("Signing Algorithm", oidc.SigningAlgorithm)
 		cols.AddRowIfNotEmpty("Token Duration", oidc.Duration)
-		cols.AddRowIfNotEmpty("Cache Path", oidc.CachePath)
-		cols.AddRowIfNotEmpty("Cache Refresh Before", oidc.CacheRefreshBefore)
+		if oidc.Cache {
+			if p, err := cfg.OIDCTokenCachePath(); err == nil && p != "" {
+				cols.AddRow("Token Cache", p)
+			} else {
+				cols.AddRow("Token Cache", "enabled")
+			}
+			cols.AddRowIfNotEmpty("Cache Refresh Before", oidc.CacheRefreshBefore)
+		}
 
 		switch steps := oidc.AWSConfig; {
 		case steps == nil:

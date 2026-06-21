@@ -312,11 +312,15 @@ func oidcWebIdentityOption(cfg *natscontext.Context, oidc *natscontext.OIDC) nat
 	refresh, err := oidc.ParsedCacheRefreshBefore()
 	fatalIfError(err, "invalid oidc cache refresh window")
 
+	// Empty when oidc.cache is false; awsauth then mints without caching.
+	cachePath, err := cfg.OIDCTokenCachePath()
+	fatalIfError(err, "could not determine oidc token cache path")
+
 	ts, err := awsauth.NewFromAWSConfig(awsCfg, awsauth.Config{
 		Audience:           oidc.Audience,
 		SigningAlgorithm:   oidc.SigningAlgorithm,
 		Duration:           duration,
-		CachePath:          oidc.CachePath,
+		CachePath:          cachePath,
 		CacheRefreshBefore: refresh,
 	})
 	fatalIfError(err, "could not configure AWS web identity authentication")

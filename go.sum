@@ -194,8 +194,8 @@ github.com/stretchr/testify v1.6.1/go.mod h1:6Fq8oRcR53rry900zMqJjRRixrwX3KX962/
 github.com/stretchr/testify v1.7.0/go.mod h1:6Fq8oRcR53rry900zMqJjRRixrwX3KX962/h/Wwjteg=
 github.com/stretchr/testify v1.11.1 h1:7s2iGBzp5EwR7/aIZr8ao5+dra3wiQyKjjFuvgVKu7U=
 github.com/stretchr/testify v1.11.1/go.mod h1:wZwfW3scLgRK+23gO65QZefKpKQRnfz6sD981Nm4B6U=
-github.com/sylr/jsm.go v0.0.0-20260620201548-927abd5cc6ce h1:FeIzS92DqP8afMiBk0IRq0Us283rXDL11lPPU+86cbw=
-github.com/sylr/jsm.go v0.0.0-20260620201548-927abd5cc6ce/go.mod h1:NXhLXU5ou8HKcpvAZolJPQs7t/u8TRbwCWs7WdUPgFo=
+github.com/sylr/jsm.go v0.0.0-20260621134548-fb8441405179 h1:lwkepmY8WybkCREka4BJDHaQUY4U90FO/gOm+2kCAww=
+github.com/sylr/jsm.go v0.0.0-20260621134548-fb8441405179/go.mod h1:NXhLXU5ou8HKcpvAZolJPQs7t/u8TRbwCWs7WdUPgFo=
 github.com/sylr/nats-oidc-callout/lib/awsauth v0.0.0-20260620181454-063f384a6844 h1:Lm8fduVMCsJOmtdjcoWFUbFVsx+FOpWU2++uEiUJgjg=
 github.com/sylr/nats-oidc-callout/lib/awsauth v0.0.0-20260620181454-063f384a6844/go.mod h1:3IkjbmNapBgufWzd5rM0sWc71eYvu7rdFJWuW8ahcxc=
 github.com/synadia-io/jwt-auth-builder.go v0.0.9 h1:UmXQ0JsqiA7sboE0VC46YEqrGAFA4MYHnhw54uYKRi8=
