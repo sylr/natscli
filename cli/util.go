@@ -800,16 +800,14 @@ func outPutMSGBodyCompact(data []byte, filter string, subject string, stream str
 }
 
 func outPutMSGBody(data []byte, filter string, subject string, stream string) {
-	output, err := outPutMSGBodyCompact(data, filter, subject, stream)
+	// outPutMSGBodyCompact always leaves the cursor on a fresh line, so a single
+	// blank line here is enough to separate consecutive messages.
+	_, err := outPutMSGBodyCompact(data, filter, subject, stream)
 	if err != nil {
 		return
 	}
 
 	fmt.Println()
-
-	if !strings.HasSuffix(output, "\n") {
-		fmt.Println()
-	}
 }
 
 func filterDataThroughCmd(data []byte, filter, subject, stream string) ([]byte, error) {
