@@ -51,6 +51,41 @@ func setupConsumerTest(t *testing.T, replicas int, mgr *jsm.Manager, args ...jsm
 	return consumerName, nil
 }
 
+// waitConsumerClusterReady blocks until the consumer's RAFT group reports an
+// elected leader and the expected number of current peers. Stepping down before
+// the group is fully formed makes the CLI either report the wrong peer count or
+// fail with "consumer has no current leader", which is the source of the
+// TestConsumerClusterDown flakiness. The poll uses the same connection (server
+// 0) the CLI uses, so a pass here guarantees the CLI sees the same healthy state.
+func waitConsumerClusterReady(t *testing.T, mgr *jsm.Manager, stream, consumer string, peers int) {
+	t.Helper()
+
+	con, err := mgr.LoadConsumer(stream, consumer)
+	if err != nil {
+		t.Fatalf("could not load consumer %q: %s", consumer, err)
+	}
+
+	deadline := time.Now().Add(20 * time.Second)
+	for time.Now().Before(deadline) {
+		nfo, err := con.State()
+		if err == nil && nfo.Cluster != nil && nfo.Cluster.Leader != "" && len(nfo.Cluster.Replicas)+1 == peers {
+			ready := true
+			for _, r := range nfo.Cluster.Replicas {
+				if !r.Current || r.Offline {
+					ready = false
+					break
+				}
+			}
+			if ready {
+				return
+			}
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+
+	t.Fatalf("consumer %q did not form a healthy %d-peer RAFT group in time", consumer, peers)
+}
+
 func TestConsumerAdd(t *testing.T) {
 	withJSServer(t, func(t *testing.T, srv *server.Server, nc *nats.Conn, mgr *jsm.Manager) error {
 		createDefaultTestStream(t, mgr, 1)
@@ -433,6 +468,10 @@ func TestConsumerClusterDown(t *testing.T) {
 			t.Fatal(err)
 		}
 
+		// Ensure the consumer RAFT group has a leader and all 3 peers before
+		// stepping down, otherwise the CLI sees an incomplete group.
+		waitConsumerClusterReady(t, mgr, defaultStreamName, name, 3)
+
 		output := runNatsCli(t, fmt.Sprintf("--server='%s' consumer cluster step-down %s %s", servers[0].ClientURL(), defaultStreamName, name))
 		success, field, expected := expectMatchMap(t,
 			map[string]string{
@@ -451,10 +490,13 @@ func TestConsumerClusterDown(t *testing.T) {
 
 func TestConsumerClusterBalance(t *testing.T) {
 	withJSCluster(t, func(t *testing.T, servers []*server.Server, nc *nats.Conn, mgr *jsm.Manager) error {
-		_, err := setupConsumerTest(t, 3, mgr)
+		name, err := setupConsumerTest(t, 3, mgr)
 		if err != nil {
 			t.Fatal(err)
 		}
+
+		// Wait for the consumer's RAFT group to settle before balancing.
+		waitConsumerClusterReady(t, mgr, defaultStreamName, name, 3)
 
 		output := runNatsCli(t, fmt.Sprintf("--server='%s' consumer cluster balance %s", servers[0].ClientURL(), defaultStreamName))
 		success, field, expected := expectMatchMap(t,

@@ -38,6 +38,39 @@ func setupStreamTest(t *testing.T, mgr *jsm.Manager, args ...jsm.StreamOption) s
 	return name
 }
 
+// waitStreamClusterReady mirrors waitConsumerClusterReady for stream RAFT
+// groups: it blocks until the stream reports an elected leader and the expected
+// number of current peers, so a subsequent step-down or balance sees a
+// fully-formed group instead of racing cluster formation.
+func waitStreamClusterReady(t *testing.T, mgr *jsm.Manager, stream string, peers int) {
+	t.Helper()
+
+	str, err := mgr.LoadStream(stream)
+	if err != nil {
+		t.Fatalf("could not load stream %q: %s", stream, err)
+	}
+
+	deadline := time.Now().Add(20 * time.Second)
+	for time.Now().Before(deadline) {
+		nfo, err := str.LatestInformation()
+		if err == nil && nfo.Cluster != nil && nfo.Cluster.Leader != "" && len(nfo.Cluster.Replicas)+1 == peers {
+			ready := true
+			for _, r := range nfo.Cluster.Replicas {
+				if !r.Current || r.Offline {
+					ready = false
+					break
+				}
+			}
+			if ready {
+				return
+			}
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+
+	t.Fatalf("stream %q did not form a healthy %d-peer RAFT group in time", stream, peers)
+}
+
 func TestStreamAdd(t *testing.T) {
 	withJSServer(t, func(t *testing.T, srv *server.Server, nc *nats.Conn, mgr *jsm.Manager) error {
 		name := "name_for_add"
@@ -580,6 +613,10 @@ func TestStreamStepDown(t *testing.T) {
 			t.Errorf("unable to create stream: %s", err)
 		}
 
+		// Wait for a leader and both peers before stepping down so the CLI
+		// sees a fully-formed group.
+		waitStreamClusterReady(t, mgr, name, 2)
+
 		output := string(runNatsCli(t, fmt.Sprintf("--server='%s' stream cluster step-down %s", servers[0].ClientURL(), name)))
 		if !expectMatchLine(t, output, `New leader elected "s\d"`) {
 			t.Errorf("Unexecpted output :%s", output)
@@ -591,7 +628,10 @@ func TestStreamStepDown(t *testing.T) {
 
 func TestStreamBalance(t *testing.T) {
 	withJSCluster(t, func(t *testing.T, servers []*server.Server, nc *nats.Conn, mgr *jsm.Manager) error {
-		setupStreamTest(t, mgr, jsm.Replicas(2))
+		name := setupStreamTest(t, mgr, jsm.Replicas(2))
+
+		// Wait for the stream's RAFT group to settle before balancing.
+		waitStreamClusterReady(t, mgr, name, 2)
 
 		output := string(runNatsCli(t, fmt.Sprintf("--server='%s' stream cluster balance", servers[0].ClientURL())))
 		if !expectMatchLine(t, output, `Balanced \d streams`) {
