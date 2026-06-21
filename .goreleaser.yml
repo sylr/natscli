@@ -150,8 +150,8 @@ dockers_v2:
       - "ghcr.io/sylr/natscli"
     tags:
       # Docker tags cannot contain '+', so sanitize the +sylr.N build
-      # metadata (e.g. v1.2.3+sylr.1 -> v1.2.3-sylr.1).
-      - "v{{ replace .Version \"+\" \"-\" }}"
+      # metadata (e.g. v1.2.3+sylr.1 -> v1.2.3_sylr.1).
+      - "v{{ replace .Version \"+\" \"_\" }}"
       - latest
     platforms:
       - linux/amd64

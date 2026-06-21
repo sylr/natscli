@@ -1,3 +1,92 @@
+## The NATS Command Line Interface — `sylr` soft fork
+
+> [!NOTE]
+> This is a **soft fork** of [`nats-io/natscli`](https://github.com/nats-io/natscli),
+> maintained at [`sylr/natscli`](https://github.com/sylr/natscli).
+>
+> "Soft fork" means it tracks upstream closely and stays a drop-in replacement
+> for the official `nats` CLI: same commands, same behaviour, same module path
+> (`github.com/nats-io/natscli`). It only adds features and packaging on top —
+> there are no breaking changes versus upstream. The intent is to keep changes
+> upstreamable and to rebase onto new upstream releases rather than diverge.
+>
+> Releases are tagged `vX.Y.Z+sylr.N`, where `vX.Y.Z` is the upstream release
+> this fork is based on and `+sylr.N` is the fork's own increment.
+
+### Differences from upstream
+
+Everything below this section is the upstream documentation, unchanged. The
+fork adds the following on top of `nats-io/natscli`:
+
+#### Features
+
+* **Shell completion for stream and consumer names.** Positional arguments and
+  `--stream` flags complete live JetStream stream/consumer names. Results are
+  cached per-context on disk under `$XDG_CACHE_HOME/nats/cli/completion/` so
+  completion stays fast (and works briefly even if the server is unreachable).
+  The cache TTL defaults to 5m and can be tuned with `NATS_COMPLETION_CACHE_TTL`
+  (a duration; `0` disables caching). Set `NATS_COMPLETION_DEBUG=1` to print
+  completion errors to stderr.
+* **Shell completion for the `--context` flag**, completing the names of your
+  configured contexts.
+* **OIDC auth-callout via AWS web identity tokens.** The CLI can connect to a
+  NATS server fronted by an OIDC auth-callout service
+  (e.g. [`sylr/nats-oidc-callout`](https://github.com/sylr/nats-oidc-callout))
+  by minting an AWS web identity token. Configuration lives entirely in the NATS
+  **context** (not in CLI flags): an `oidc` section carries `audience`,
+  `signing_algorithm`, `duration`, `cache_path`, `cache_refresh_before`, and an
+  `aws_config` assume-role chain. Populate it with `nats context edit` and
+  validate it with `nats context validate`. Token-mint failures are surfaced
+  explicitly rather than swallowed.
+
+#### Internals
+
+* **CLI framework migrated from [`choria-io/fisk`](https://github.com/choria-io/fisk)
+  to [`spf13/cobra`](https://github.com/spf13/cobra)** (+`pflag`). This is
+  behaviour-preserving — the only visible difference is that `--help` lists flags
+  alphabetically rather than in registration order. A `--help-llm` /
+  `LLMFORMAT` markdown help renderer is also available.
+
+#### Packaging & releases
+
+* Release pipeline (goreleaser) retargeted at the `sylr/natscli` fork, producing
+  SBOMs (via syft), Docker images, and a Homebrew cask.
+* Releases trigger only on fork-specific `vX.Y.Z+sylr.N` tags, with `+` sanitized
+  in Docker image tags.
+* CI derives its Go version from `go.mod` (`go-version-file`) instead of pinning.
+
+#### Dependency notes
+
+The OIDC feature relies on two `sylr` modules wired through `go.mod`:
+
+```
+replace github.com/nats-io/jsm.go => github.com/sylr/jsm.go
+require github.com/sylr/nats-oidc-callout/lib/awsauth
+```
+
+The `jsm.go` fork adds the context-level OIDC/AWS config plumbing that upstream
+does not have.
+
+#### Installing this fork
+
+On macOS, install via the `sylr` Homebrew tap:
+
+```
+brew tap sylr/tap
+brew install --cask sylr/tap/nats
+```
+
+Otherwise, grab a binary (Zip, RPM, DEB) from the fork's
+[GitHub releases page](https://github.com/sylr/natscli/releases), or pull the
+Docker image for a specific release (Docker tags cannot contain `+`, so the
+`+sylr.N` build metadata is sanitized to `_sylr.N`):
+
+```
+docker pull ghcr.io/sylr/natscli:v0.4.0_sylr.5
+```
+
+---
+
 ## The NATS Command Line Interface
 
 A command line utility to interact with and manage NATS.
