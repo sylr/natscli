@@ -1,0 +1,56 @@
+name: Setup Go with role-scoped cache
+description: >
+  Set up Go and restore/save two caches with explicit keys so parallel jobs
+  do not clobber each other's build cache. The module cache is shared (its
+  content is deterministic from go.sum), while the build cache is scoped per
+  role so every job saves its own under a distinct key.
+
+inputs:
+  role:
+    description: >
+      Build-cache role (e.g. lint, test, fips, goreleaser). Scopes the
+      GOCACHE key so each kind of job keeps its own warm build cache. Use the
+      same role in different workflows to share a cache (e.g. the goreleaser
+      snapshot in CI and the real release).
+    required: true
+
+runs:
+  using: composite
+  steps:
+    # Manage caching ourselves; setup-go's built-in cache uses a single key per
+    # (os, go-version, go.sum) with no role component, so parallel jobs race and
+    # only the first to finish persists its build cache.
+    - name: Setup Go
+      uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+      with:
+        go-version-file: go.mod
+        cache: false
+
+    # Resolve cache locations via the toolchain so the paths are correct on
+    # both Linux and Windows runners.
+    - name: Resolve Go cache paths
+      id: goenv
+      shell: bash
+      run: |
+        echo "modcache=$(go env GOMODCACHE)" >> "$GITHUB_OUTPUT"
+        echo "buildcache=$(go env GOCACHE)" >> "$GITHUB_OUTPUT"
+
+    # Shared across all jobs: identical content for a given go.sum, so whichever
+    # job saves it first is fine and the rest simply hit it.
+    - name: Go module cache
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+      with:
+        path: ${{ steps.goenv.outputs.modcache }}
+        key: ${{ runner.os }}-go-mod-${{ hashFiles('go.sum') }}
+        restore-keys: |
+          ${{ runner.os }}-go-mod-
+
+    # Per-role: each job saves its own build cache under its own key, so no job
+    # clobbers another's, and each restores its own warm cache on the next run.
+    - name: Go build cache
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+      with:
+        path: ${{ steps.goenv.outputs.buildcache }}
+        key: ${{ runner.os }}-go-build-${{ inputs.role }}-${{ hashFiles('go.sum') }}
+        restore-keys: |
+          ${{ runner.os }}-go-build-${{ inputs.role }}-
