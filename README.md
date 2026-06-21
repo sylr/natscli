@@ -34,10 +34,54 @@ fork adds the following on top of `nats-io/natscli`:
   (e.g. [`sylr/nats-oidc-callout`](https://github.com/sylr/nats-oidc-callout))
   by minting an AWS web identity token. Configuration lives entirely in the NATS
   **context** (not in CLI flags): an `oidc` section carries `audience`,
-  `signing_algorithm`, `duration`, `cache_path`, `cache_refresh_before`, and an
+  `signing_algorithm`, `duration`, `cache`, `cache_refresh_before`, and an
   `aws_config` assume-role chain. Populate it with `nats context edit` and
   validate it with `nats context validate`. Token-mint failures are surfaced
   explicitly rather than swallowed.
+
+#### OIDC context example
+
+Contexts are JSON files under `~/.config/nats/context/<name>.json`. A context
+that authenticates through an OIDC auth-callout service looks like this:
+
+```json
+{
+  "url": "nats://nats.example.com:4222",
+  "description": "Cluster via OIDC auth-callout",
+  "oidc": {
+    "audience": "nats://example-cluster/callout",
+    "signing_algorithm": "RS256",
+    "duration": "1h",
+    "cache": true,
+    "cache_refresh_before": "30s",
+    "aws_config": [
+      { "profile": "my-profile", "region": "eu-west-1" },
+      {
+        "role_arn": "arn:aws:iam::111111111111:role/nats-oidc",
+        "session_name": "nats-cli",
+        "duration": "1h"
+      }
+    ]
+  }
+}
+```
+
+* `aws_config` is an assume-role chain folded left to right: the first step
+  seeds the base credentials (a `profile`, a `region`, or static
+  `access_key_id`/`secret_access_key`), and each later step that names a
+  `role_arn` assumes that role with the credentials produced so far. A
+  single-step `[{ "profile": "...", "region": "..." }]` does no role
+  assumption; `[]` (or omitting the field) uses the default AWS credential
+  chain. A region must resolve — `GetWebIdentityToken` is not served on the
+  global STS endpoint.
+* `duration` is the requested token lifetime (STS allows `60s`..`3600s`). The
+  NATS user JWT the callout issues is capped to it, so this also sets how often
+  a long-lived connection re-authenticates by reconnecting.
+* `cache: true` caches the minted token on disk at a managed, per-context path
+  (`<config>/nats/cache/tokens/<name>.jwt`) so consecutive CLI invocations
+  reuse it instead of calling STS each time; `cache_refresh_before` controls
+  how close to expiry a cached token is refreshed in the background. `nats
+  context info <name>` shows the resolved cache path when caching is on.
 
 #### Internals
 
