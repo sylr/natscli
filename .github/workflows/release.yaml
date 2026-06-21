@@ -10,6 +10,7 @@ jobs:
       contents: write
       packages: write
       id-token: write
+      attestations: write
     steps:
       - name: Checkout code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -77,3 +78,18 @@ jobs:
           # PAT (or fine-grained token) with contents:write on sylr/homebrew-tap,
           # since the built-in GITHUB_TOKEN is scoped only to this repo.
           HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
+
+      # Mint a GitHub build-provenance attestation for every released file
+      # (archives, DEBs, RPMs, SBOMs) listed in goreleaser's checksum file.
+      # Verify with: gh attestation verify <file> --owner sylr
+      - name: Attest release artifacts
+        uses: actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26 # v4
+        with:
+          subject-checksums: dist/SHA256SUMS
+
+      # Attest the pushed Docker images via the digests goreleaser recorded.
+      # Verify with: gh attestation verify oci://ghcr.io/sylr/natscli:<tag> --owner sylr
+      - name: Attest container images
+        uses: actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26 # v4
+        with:
+          subject-checksums: dist/digests.txt

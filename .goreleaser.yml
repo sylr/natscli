@@ -14,7 +14,7 @@ release:
   prerelease: auto
 
 changelog:
-  disable: true
+  disable: false
 
 builds:
   - main: ./nats
@@ -58,14 +58,23 @@ archives:
   - name_template: "nats-v{{.Version}}-{{.Os}}-{{.Arch}}{{if .Arm}}{{.Arm}}{{end}}"
     wrap_in_directory: true
     formats:
-      - zip
+      - tar.gz
     files:
       - README.md
       - LICENSE
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
 
 checksum:
   name_template: "SHA256SUMS"
   algorithm: sha256
+
+# Emit a sha256sum-style list of pushed Docker manifest digests so the release
+# workflow can mint a GitHub build-provenance attestation for each image.
+docker_digest:
+  name_template: "digests.txt"
 
 sboms:
   - artifacts: archive
