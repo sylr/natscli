@@ -137,7 +137,7 @@ func configureSubCommand(app commandHost) {
 	sub.RunE = c.subscribe
 	cmdAddTags(sub, "scope:user", "impact:rw")
 	sub.Long = subHelp
-	addCheat("sub", sub)
+	addCheat("subscribe", sub)
 
 	addArgCumulative(sub, "subjects", "Subjects to subscribe to", false, "string")
 	sub.Flags().StringVar(&c.queue, "queue", "", "Subscribe to a named queue group")

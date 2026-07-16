@@ -83,7 +83,7 @@ for an indefinite period or a per-bucket configured TTL.
 
 	obj := addCommand(app, "object", help)
 	obj.Aliases = []string{"obj"}
-	addCheat("obj", obj)
+	addCheat("object", obj)
 
 	addCreateFlags := func(f *cobra.Command, edit bool) {
 		f.Flags().DurationVar(&c.ttl, "ttl", 0, "How long to keep objects for")
@@ -392,6 +392,7 @@ func (c *objCommand) showObjectInfo(nfo *jetstream.ObjectInfo) {
 	cols.AddRow("Chunks", nfo.Chunks)
 	cols.AddRowf("Digest", "%s %x", digest[0], digestBytes)
 	cols.AddRowIf("Deleted", nfo.Deleted, nfo.Deleted)
+
 	if len(nfo.Headers) > 0 {
 		var vals []string
 		for k, v := range nfo.Headers {
@@ -400,6 +401,11 @@ func (c *objCommand) showObjectInfo(nfo *jetstream.ObjectInfo) {
 			}
 		}
 		cols.AddStringsAsValue("Headers", vals)
+	}
+
+	if len(nfo.Metadata) > 0 {
+		cols.AddSectionTitle("Metadata")
+		cols.AddMapStrings(nfo.Metadata)
 	}
 }
 

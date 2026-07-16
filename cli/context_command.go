@@ -55,7 +55,7 @@ func configureCtxCommand(app commandHost) {
 
 	context := addCommand(app, "context", "Manage nats configuration contexts")
 	context.Aliases = []string{"ctx"}
-	addCheat("contexts", context)
+	addCheat("context", context)
 
 	save := addCommand(context, "add", "Update or create a context")
 	save.Aliases = []string{"create", "save"}

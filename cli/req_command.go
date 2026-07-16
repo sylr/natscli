@@ -267,7 +267,7 @@ func (c *reqCmd) requestAction(cmd *cobra.Command, args []string) error {
 				if newEof {
 					eof = true
 				}
-				if body == "" && eof {
+				if body == "" && eof && pub.IsSendOnNewLine() {
 					return nil
 				}
 				c.body = body
@@ -278,7 +278,7 @@ func (c *reqCmd) requestAction(cmd *cobra.Command, args []string) error {
 				return err
 			}
 
-			if pub.IsSendOnEOF() || eof {
+			if !pub.UseStdin || pub.IsSendOnEOF() || eof {
 				return nil
 			}
 		}

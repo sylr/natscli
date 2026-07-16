@@ -29,7 +29,6 @@ import (
 
 type counterCmd struct {
 	subject string
-	value   string
 	stream  string
 	json    bool
 }
@@ -56,12 +55,20 @@ func configureCounterCommand(app commandHost) {
 	view.Flags().StringVar(&c.stream, "stream", "", "The stream name to fetch the value from")
 
 	incr := addCommand(ctr, "increment", "Increment the value of a counter")
-	incr.Aliases = []string{"incr", "i"}
+	incr.Aliases = []string{"incr", "inc", "i"}
 	incr.RunE = c.incrAction
 	cmdAddTags(incr, "scope:user", "impact:rw")
 	addArg(incr, "subject", "Subject to get counter for", true, "string")
-	addArg(incr, "value", "The value to increment", false, "string")
+	addArg(incr, "value", "The value to increment", true, "string")
 	incr.Flags().StringVar(&c.stream, "stream", "", "The stream name to fetch the value from")
+
+	decr := addCommand(ctr, "decrement", "Decrement the value of a counter")
+	decr.Aliases = []string{"decr", "dec", "d"}
+	decr.RunE = c.incrAction
+	cmdAddTags(decr, "scope:user", "impact:rw")
+	addArg(decr, "subject", "Subject to get counter for", true, "string")
+	addArg(decr, "value", "The value to decrement", true, "string")
+	decr.Flags().StringVar(&c.stream, "stream", "", "The stream name to fetch the value from")
 
 	ls := addCommand(ctr, "list", "List Counters in a stream")
 	ls.Aliases = []string{"l", "ls"}
@@ -135,9 +142,8 @@ func (c *counterCmd) getAction(_ *cobra.Command, args []string) error {
 	return nil
 }
 
-func (c *counterCmd) incrAction(_ *cobra.Command, args []string) error {
+func (c *counterCmd) incrAction(cmd *cobra.Command, args []string) error {
 	c.subject = args[0]
-	c.value = argValue(args, 1)
 
 	_, ctr, err := c.getCounterManager()
 	if err != nil {
@@ -145,9 +151,13 @@ func (c *counterCmd) incrAction(_ *cobra.Command, args []string) error {
 	}
 
 	v := &big.Int{}
-	_, ok := v.SetString(c.value, 10)
+	_, ok := v.SetString(argValue(args, 1), 10)
 	if !ok {
 		return fmt.Errorf("invalid value")
+	}
+
+	if cmd.Name() == "decrement" {
+		v.Neg(v)
 	}
 
 	val, err := ctr.Add(context.Background(), c.subject, v)
