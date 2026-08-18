@@ -64,7 +64,7 @@ require (
 	github.com/aws/smithy-go v1.27.1 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
-	github.com/choria-io/fisk v0.8.4-0.20260530151536-30471af3a46f // indirect
+	github.com/choria-io/fisk v0.9.1 // indirect
 	github.com/clipperhouse/uax29/v2 v2.7.0 // indirect
 	github.com/google/go-tpm v0.9.8 // indirect
 	github.com/google/uuid v1.6.0 // indirect
@@ -96,4 +96,4 @@ require (
 	google.golang.org/protobuf v1.36.11 // indirect
 )
 
-replace github.com/nats-io/jsm.go => github.com/sylr/jsm.go v0.0.0-20260621134548-fb8441405179
+replace github.com/nats-io/jsm.go => github.com/sylr/jsm.go v0.0.0-20260818113856-f6da9aacd071
