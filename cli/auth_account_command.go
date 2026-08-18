@@ -83,6 +83,7 @@ type authAccountCommand struct {
 	pubDeny                 []string
 	showJWT                 bool
 	skRole                  string
+	skUnscoped              bool
 	storeMax                int64
 	storeMaxStream          int64
 	storeMaxStreamString    string
@@ -333,6 +334,7 @@ func configureAuthAccountCommand(auth commandHost) {
 	cmdAddTags(skadd, "scope:system", "impact:rw")
 	addArg(skadd, "account", "Account to act on", false, "string")
 	addArg(skadd, "role", "The role to add a key for", false, "string")
+	skadd.Flags().BoolVar(&c.skUnscoped, "unscoped", false, "Adds a unscoped signing key")
 	skadd.Flags().StringVar(&c.operatorName, "operator", "", "Operator to act on")
 	skadd.Flags().StringVar(&c.description, "description", "", "Description for the signing key")
 	skadd.Flags().Int64Var(&c.maxSubs, "subscriptions", -1, "Maximum allowed subscriptions")
@@ -355,14 +357,14 @@ func configureAuthAccountCommand(auth commandHost) {
 	skInfo.Flags().StringVar(&c.operatorName, "operator", "", "Operator to act on")
 	skInfo.Flags().BoolVarP(&c.json, "json", "j", false, "Produce JSON output")
 
-	skls := addCommand(sk, "ls", "List Scoped Signing Keys")
+	skls := addCommand(sk, "ls", "List Signing Keys")
 	skls.Aliases = []string{"list"}
 	skls.RunE = c.skListAction
 	cmdAddTags(skls, "scope:system", "impact:ro")
 	addArg(skls, "account", "Account to act on", false, "string")
 	skls.Flags().StringVar(&c.operatorName, "operator", "", "Operator to act on")
 
-	skrm := addCommand(sk, "rm", "Remove a scoped signing key")
+	skrm := addCommand(sk, "rm", "Remove a Signing key")
 	skrm.RunE = c.skRmAction
 	cmdAddTags(skrm, "scope:system", "impact:rw")
 	addArg(skrm, "account", "Account to act on", false, "string")
@@ -567,13 +569,18 @@ func (c *authAccountCommand) skRmAction(_ *cobra.Command, args []string) error {
 		return err
 	}
 
-	sk, err := au.SelectSigningKey(acct, c.skRole)
+	sk, key, err := au.SelectSigningKey(acct, c.skRole, false)
 	if err != nil {
 		return err
 	}
 
 	if !c.force {
-		ok, err := askConfirmation(fmt.Sprintf("Really remove the Scoped Signing Key %s with role %s", sk.Key(), sk.Role()), false)
+		var ok bool
+		if sk == nil {
+			ok, err = askConfirmation(fmt.Sprintf("Really remove the Signing Key %s", key), false)
+		} else {
+			ok, err = askConfirmation(fmt.Sprintf("Really remove the Scoped Signing Key %s with role %s", sk.Key(), sk.Role()), false)
+		}
 		if err != nil {
 			return err
 		}
@@ -583,12 +590,12 @@ func (c *authAccountCommand) skRmAction(_ *cobra.Command, args []string) error {
 		}
 	}
 
-	ok, err := acct.ScopedSigningKeys().Delete(sk.Key())
+	ok, err := acct.ScopedSigningKeys().Delete(key)
 	if err != nil {
 		return err
 	}
 	if !ok {
-		return fmt.Errorf("key %q not found", sk.Key())
+		return fmt.Errorf("key %q not found", key)
 	}
 
 	err = auth.Commit()
@@ -596,7 +603,7 @@ func (c *authAccountCommand) skRmAction(_ *cobra.Command, args []string) error {
 		return err
 	}
 
-	fmt.Printf("key %q removed\n", sk.Key())
+	fmt.Printf("key %q removed\n", key)
 
 	return nil
 }
@@ -610,7 +617,7 @@ func (c *authAccountCommand) skInfoAction(_ *cobra.Command, args []string) error
 		return err
 	}
 
-	sk, err := au.SelectSigningKey(acct, c.skRole)
+	sk, _, err := au.SelectSigningKey(acct, c.skRole, true)
 	if err != nil {
 		return err
 	}
@@ -633,14 +640,29 @@ func (c *authAccountCommand) skAddAction(_ *cobra.Command, args []string) error 
 		return err
 	}
 
-	if c.skRole == "" {
+	if c.skRole == "" && !c.skUnscoped {
 		err := iu.AskOne(&survey.Input{
 			Message: "Role Name",
-			Help:    "The role to associate with this key",
-		}, &c.skRole, survey.WithValidator(survey.Required))
+			Help:    "The role to associate with this key, empty for a unscoped key",
+		}, &c.skRole)
 		if err != nil {
 			return err
 		}
+	}
+
+	if c.skRole == "" || c.skUnscoped {
+		k, err := acct.ScopedSigningKeys().Add()
+		if err != nil {
+			return err
+		}
+
+		err = auth.Commit()
+		if err != nil {
+			return err
+		}
+
+		fmt.Printf("Added signing key: %s\n", k)
+		return nil
 	}
 
 	if c.maxPayloadString != "" {
@@ -751,24 +773,42 @@ func (c *authAccountCommand) skListAction(_ *cobra.Command, args []string) error
 
 	var table *iu.Table
 
-	if len(acct.ScopedSigningKeys().List()) > 0 {
-		table = iu.NewTableWriterf(opts(), "Scoped Signing Keys")
-		table.AddHeaders("Role", "Key", "Description", "Max Subscriptions", "Pub Perms", "Sub Perms")
-		for _, sk := range acct.ScopedSigningKeys().List() {
-			scope, _ := acct.ScopedSigningKeys().GetScope(sk)
+	var scopes []ab.ScopeLimits
+	var keys []string
+	for _, sk := range acct.ScopedSigningKeys().List() {
+		scope, _ := acct.ScopedSigningKeys().GetScope(sk)
+		if scope == nil {
+			keys = append(keys, sk)
+			continue
+		}
 
+		scopes = append(scopes, scope)
+	}
+
+	if len(scopes) == 0 && len(keys) == 0 {
+		fmt.Println("No Signing Keys or Roles defined")
+		return nil
+	}
+
+	table = iu.NewTableWriterf(opts(), "Signing Keys for Account %q", acct.Name())
+	table.AddHeaders("Key", "Role", "Description", "Max Subscriptions", "Pub Perms", "Sub Perms")
+	if len(scopes) > 0 {
+		for _, scope := range scopes {
 			pubs := len(scope.PubPermissions().Allow()) + len(scope.PubPermissions().Deny())
 			subs := len(scope.SubPermissions().Allow()) + len(scope.SubPermissions().Deny())
 
-			table.AddRow(scope.Role(), scope.Key(), scope.Description(), scope.MaxSubscriptions(), pubs, subs)
+			table.AddRow(scope.Key(), scope.Role(), scope.Description(), scope.MaxSubscriptions(), pubs, subs)
 		}
-		fmt.Println(table.Render())
-		fmt.Println()
 	}
 
-	if table == nil {
-		fmt.Println("No Scoped Signing Keys or Roles defined")
+	if len(keys) > 0 {
+		for _, key := range keys {
+			table.AddRow(key, "", "", "", "", "")
+		}
 	}
+
+	fmt.Println(table.Render())
+	fmt.Println()
 
 	return nil
 }
@@ -1112,11 +1152,11 @@ func (c *authAccountCommand) addAction(cmd *cobra.Command, args []string) error 
 	}
 
 	if c.signingKey != "" {
-		sk, err := au.SelectSigningKey(acct, c.signingKey)
+		_, key, err := au.SelectSigningKey(acct, c.signingKey, false)
 		if err != nil {
 			return err
 		}
-		c.signingKey = sk.Key()
+		c.signingKey = key
 	}
 
 	if c.signingKey != "" {

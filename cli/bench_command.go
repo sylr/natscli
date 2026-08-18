@@ -49,7 +49,7 @@ import (
 type benchCmd struct {
 	subject              string
 	numClients           int
-	numMsg               int
+	numMsg               int64
 	msgSizeString        string
 	msgSize              int
 	csvFile              string
@@ -86,6 +86,7 @@ type benchCmd struct {
 	filterSubjects       []string // used by JS consumer commands
 	filterSubject        string   // used by JS get command
 	throughput           int
+	duration             time.Duration
 }
 
 // rateThrottler throttles a message loop to approximately target messages/sec.
@@ -106,7 +107,7 @@ func newRateThrottler(target float64) *rateThrottler {
 
 // throttle blocks as needed so that `sent` messages have been produced in at
 // least sent/target seconds since the throttler was created.
-func (r *rateThrottler) throttle(sent int) time.Duration {
+func (r *rateThrottler) throttle(sent int64) time.Duration {
 	expected := float64(sent) / r.target
 	elapsed := time.Since(r.start).Seconds()
 	if expected > elapsed {
@@ -132,7 +133,7 @@ func configureBenchCommand(app commandHost) {
 	addCommonFlags := func(f *cobra.Command) {
 		cmdAddTags(f, "scope:user", "impact:rw")
 		f.Flags().IntVar(&c.numClients, "clients", 1, "Number of concurrent clients")
-		f.Flags().IntVar(&c.numMsg, "msgs", 100000, "Number of messages to publish or subscribe to")
+		f.Flags().Int64Var(&c.numMsg, "msgs", 100000, "Number of messages to publish or subscribe to")
 		negatableBoolVar(f, &c.progressBar, "progress", true, "Enable or disable the progress bar")
 		f.Flags().StringVar(&c.csvFile, "csv", "", "Save benchmark data to CSV file")
 		f.Flags().StringVar(&c.msgSizeString, "size", "128B", "Size of the test messages")
@@ -150,6 +151,8 @@ func configureBenchCommand(app commandHost) {
 	addThroughputFlag := func(f *cobra.Command) {
 		f.Flags().IntVar(&c.throughput, "throughput", 0, "If set > 0, throttle aggregate message send throughput to approximately THROUGHPUT messages/second across all clients (0 disables). If --sleep is set, the achieved rate may be lower")
 		flagPlaceholder(f, "throughput", "THROUGHPUT")
+		f.Flags().DurationVar(&c.duration, "duration", 0, "Run for approximately this long instead of a fixed message count, deriving the number of messages from --throughput and taking precedence over --msgs (requires --throughput)")
+		flagPlaceholder(f, "duration", "DURATION")
 	}
 
 	addJSCommonFlags := func(f *cobra.Command) {
@@ -328,7 +331,6 @@ func configureBenchCommand(app commandHost) {
 	oldJSPull.Flags().IntVar(&c.batchSize, "batch", 500, "Sets the fetch size for the consumer")
 	negatableBoolVar(oldJSPull, &c.ack, "ack", true, "Uses explicit message acknowledgement or not for the consumer")
 	negatableBoolVar(oldJSPull, &c.doubleAck, "doubleack", false, "Synchronously acknowledge messages, waiting for a reply from the server")
-
 }
 
 func init() {
@@ -370,8 +372,8 @@ func (c *benchCmd) getJS(nc *nats.Conn) (jetstream.JetStream, error) {
 	return js, nil
 }
 
-func (c *benchCmd) offset(putter int, counts []int) int {
-	var position = 0
+func (c *benchCmd) offset(putter int, counts []int64) int64 {
+	var position int64 = 0
 
 	for i := 0; i < putter; i++ {
 		position = position + counts[i]
@@ -380,8 +382,33 @@ func (c *benchCmd) offset(putter int, counts []int) int {
 }
 
 func (c *benchCmd) processActionArgs() error {
+	// --duration is a sub-property of --throughput: when set, derive the total
+	// number of messages from the target rate (taking precedence over --msgs).
+	// Only zero means unset; a negative duration is invalid and must fail fast.
+	if c.duration != 0 {
+		if c.duration < 0 {
+			return fmt.Errorf("--duration cannot be negative")
+		}
+
+		if c.throughput <= 0 {
+			return fmt.Errorf("--duration requires --throughput to be set")
+		}
+
+		// Derive the message count as round(throughput * duration)
+		msgs := int64(math.Round(float64(c.throughput) * c.duration.Seconds()))
+		if msgs <= 0 {
+			return fmt.Errorf("the combination of --throughput=%d and --duration=%s results in zero messages", c.throughput, c.duration)
+		}
+
+		c.numMsg = msgs
+	}
+
 	if c.numMsg <= 0 {
 		return fmt.Errorf("number of messages should be greater than 0")
+	}
+
+	if c.numMsg > math.MaxInt {
+		return fmt.Errorf("number of messages %d exceeds the maximum supported on this platform (%d)", c.numMsg, math.MaxInt)
 	}
 
 	// for pubs/request/and put only
@@ -533,6 +560,9 @@ func (c *benchCmd) generateBanner(benchType string) string {
 			bench.TypeJSPubSync, bench.TypeJSPubAsync, bench.TypeJSPubBatchAtomic, bench.TypeJSPubBatchFast,
 			bench.TypeKVPut:
 			argnvps = append(argnvps, nvp{"throughput", f(c.throughput)})
+			if c.duration > 0 {
+				argnvps = append(argnvps, nvp{"duration", f(c.duration)})
+			}
 		}
 	}
 
@@ -593,15 +623,15 @@ func (c *benchCmd) getSubscribeSubject() string {
 	}
 }
 
-func (c *benchCmd) getPublishSubject(number int) string {
+func (c *benchCmd) getPublishSubject(number int64) string {
 	if c.multiSubject {
 		if c.multiSubjectMax == 0 {
-			return c.subject + "." + strconv.Itoa(number)
+			return c.subject + "." + strconv.FormatInt(number, 10)
 		} else {
 			if c.multiSubjectRandom {
 				return c.subject + "." + fmt.Sprintf(c.multisubjectFormat, rand.IntN(c.multiSubjectMax))
 			} else {
-				return c.subject + "." + fmt.Sprintf(c.multisubjectFormat, number%c.multiSubjectMax)
+				return c.subject + "." + fmt.Sprintf(c.multisubjectFormat, number%int64(c.multiSubjectMax))
 			}
 		}
 	} else {
@@ -680,8 +710,8 @@ func (c *benchCmd) pubAction(_ *cobra.Command, args []string) error {
 	}
 
 	// catch the number of clients being more than number of messages
-	if c.numClients > c.numMsg {
-		c.numClients = c.numMsg
+	if int64(c.numClients) > c.numMsg {
+		c.numClients = int(c.numMsg)
 	}
 
 	banner := c.generateBanner(bench.TypeCorePub)
@@ -819,8 +849,8 @@ func (c *benchCmd) requestAction(_ *cobra.Command, args []string) error {
 	}
 
 	// catch the number of clients being more than number of messages
-	if c.numClients > c.numMsg {
-		c.numClients = c.numMsg
+	if int64(c.numClients) > c.numMsg {
+		c.numClients = int(c.numMsg)
 	}
 
 	banner := c.generateBanner(bench.TypeServiceRequest)
@@ -975,8 +1005,8 @@ func (c *benchCmd) jspubActions(jsPubType string) error {
 	}
 
 	// catch the number of clients being more than number of messages
-	if c.numClients > c.numMsg {
-		c.numClients = c.numMsg
+	if int64(c.numClients) > c.numMsg {
+		c.numClients = int(c.numMsg)
 	}
 
 	if c.persistModeAsync && c.replicas != 1 && jsPubType == bench.TypeJSPubBatchAtomic {
@@ -1452,8 +1482,8 @@ func (c *benchCmd) kvPutAction(_ *cobra.Command, _ []string) error {
 	}
 
 	// catch the number of clients being more than number of messages
-	if c.numClients > c.numMsg {
-		c.numClients = c.numMsg
+	if int64(c.numClients) > c.numMsg {
+		c.numClients = int(c.numMsg)
 	}
 
 	banner := c.generateBanner(bench.TypeKVPut)
@@ -1920,7 +1950,7 @@ func (c *benchCmd) getPayload(msgSize int) ([]byte, error) {
 	return buffer, nil
 }
 
-func (c *benchCmd) coreNATSPublisher(nc *nats.Conn, progress *uiprogress.Bar, payloadSize int, numMsg int, offset int) ([]uint64, error) {
+func (c *benchCmd) coreNATSPublisher(nc *nats.Conn, progress *uiprogress.Bar, payloadSize int, numMsg int64, offset int64) ([]uint64, error) {
 	state := "Publishing"
 	payload, err := c.getPayload(payloadSize)
 	if err != nil {
@@ -1945,7 +1975,7 @@ func (c *benchCmd) coreNATSPublisher(nc *nats.Conn, progress *uiprogress.Bar, pa
 	latencies := make([]uint64, numMsg)
 	throttler := newRateThrottler(c.perClientThroughput())
 
-	for i := 0; i < numMsg; i++ {
+	for i := int64(0); i < numMsg; i++ {
 		message.Subject = c.getPublishSubject(i + offset)
 		start := time.Now()
 
@@ -1969,7 +1999,7 @@ func (c *benchCmd) coreNATSPublisher(nc *nats.Conn, progress *uiprogress.Bar, pa
 	return latencies, nil
 }
 
-func (c *benchCmd) coreNATSRequester(nc *nats.Conn, progress *uiprogress.Bar, payloadSize int, numMsg int, offset int) ([]uint64, error) {
+func (c *benchCmd) coreNATSRequester(nc *nats.Conn, progress *uiprogress.Bar, payloadSize int, numMsg int64, offset int64) ([]uint64, error) {
 	errBytes := []byte("error")
 	minusByte := byte('-')
 	state := "Requesting"
@@ -1996,7 +2026,7 @@ func (c *benchCmd) coreNATSRequester(nc *nats.Conn, progress *uiprogress.Bar, pa
 	latencies := make([]uint64, numMsg)
 	throttler := newRateThrottler(c.perClientThroughput())
 
-	for i := 0; i < numMsg; i++ {
+	for i := int64(0); i < numMsg; i++ {
 		message.Subject = c.getPublishSubject(i + offset)
 
 		start := time.Now()
@@ -2024,7 +2054,7 @@ func (c *benchCmd) coreNATSRequester(nc *nats.Conn, progress *uiprogress.Bar, pa
 	return latencies, nil
 }
 
-func (c *benchCmd) jsPublisher(nc *nats.Conn, progress *uiprogress.Bar, jsPubType string, payloadSize int, numMsg int, idPrefix string, offset int, clientNumber int) ([]uint64, error) {
+func (c *benchCmd) jsPublisher(nc *nats.Conn, progress *uiprogress.Bar, jsPubType string, payloadSize int, numMsg int64, idPrefix string, offset int64, clientNumber int) ([]uint64, error) {
 	js, err := c.getJS(nc)
 	if err != nil {
 		return nil, err
@@ -2060,16 +2090,16 @@ func (c *benchCmd) jsPublisher(nc *nats.Conn, progress *uiprogress.Bar, jsPubTyp
 		// attempts counts every PublishMsgAsync call including retries after
 		// ack failures, since `i` only advances on successful acks. Driving
 		// the throttler off attempts keeps pacing honest across retries.
-		attempts := 0
+		attempts := int64(0)
 
-		for i := 0; i < numMsg; {
+		for i := int64(0); i < numMsg; {
 			state = "Publishing"
-			futures := make([]jetstream.PubAckFuture, min(c.batchSize, numMsg-i))
+			futures := make([]jetstream.PubAckFuture, min(int64(c.batchSize), numMsg-i))
 			start := time.Now()
 
-			for j := 0; j < c.batchSize && (i+j) < numMsg; j++ {
+			for j := int64(0); j < int64(c.batchSize) && (i+j) < numMsg; j++ {
 				if c.deDuplication {
-					message.Header.Set(nats.MsgIdHdr, idPrefix+"-"+strconv.Itoa(clientNumber)+"-"+strconv.Itoa(i+j+offset))
+					message.Header.Set(nats.MsgIdHdr, idPrefix+"-"+strconv.Itoa(clientNumber)+"-"+strconv.FormatInt(i+j+offset, 10))
 				}
 
 				message.Subject = c.getPublishSubject(i + j + offset)
@@ -2119,22 +2149,22 @@ func (c *benchCmd) jsPublisher(nc *nats.Conn, progress *uiprogress.Bar, jsPubTyp
 		// Atomic batch publish
 		latencies = make([]uint64, uint64(math.Ceil(float64(numMsg)/float64(c.batchSize))))
 		batch := 0
-		var msgs int
+		var msgs int64
 		batchId := idPrefix + "-" + strconv.Itoa(clientNumber)
 
-		for i := 0; i < numMsg; {
+		for i := int64(0); i < numMsg; {
 			state = "Batching  "
-			msgs = min(c.batchSize, numMsg-i)
+			msgs = min(int64(c.batchSize), numMsg-i)
 			message.Header.Del("Nats-Batch-Commit")
 			start := time.Now()
 
-			for j := 0; j < msgs; j++ {
+			for j := int64(0); j < msgs; j++ {
 				if c.deDuplication {
-					message.Header.Set(nats.MsgIdHdr, batchId+"-"+strconv.Itoa(i+j+offset))
+					message.Header.Set(nats.MsgIdHdr, batchId+"-"+strconv.FormatInt(i+j+offset, 10))
 				}
 
 				message.Header.Set("Nats-Batch-Id", batchId)
-				message.Header.Set("Nats-Batch-Sequence", strconv.Itoa(j+1))
+				message.Header.Set("Nats-Batch-Sequence", strconv.FormatInt(j+1, 10))
 				message.Subject = c.getPublishSubject(i + j + offset)
 
 				if j == msgs-1 {
@@ -2190,11 +2220,11 @@ func (c *benchCmd) jsPublisher(nc *nats.Conn, progress *uiprogress.Bar, jsPubTyp
 		start := time.Now()
 		ackSeq := uint64(0)
 
-		for i := 0; i < numMsg; i++ {
+		for i := int64(0); i < numMsg; i++ {
 			state = "Batching  "
 
 			if c.deDuplication {
-				message.Header.Set(nats.MsgIdHdr, batchId+"-"+strconv.Itoa(i+offset))
+				message.Header.Set(nats.MsgIdHdr, batchId+"-"+strconv.FormatInt(i+offset, 10))
 			}
 			message.Subject = c.getPublishSubject(i + offset)
 
@@ -2238,9 +2268,9 @@ func (c *benchCmd) jsPublisher(nc *nats.Conn, progress *uiprogress.Bar, jsPubTyp
 		latencies = make([]uint64, numMsg)
 		state = "Publishing"
 
-		for i := 0; i < numMsg; i++ {
+		for i := int64(0); i < numMsg; i++ {
 			if c.deDuplication {
-				message.Header.Set(nats.MsgIdHdr, idPrefix+"-"+strconv.Itoa(clientNumber)+"-"+strconv.Itoa(i+offset))
+				message.Header.Set(nats.MsgIdHdr, idPrefix+"-"+strconv.Itoa(clientNumber)+"-"+strconv.FormatInt(i+offset, 10))
 			}
 
 			message.Subject = c.getPublishSubject(i + offset)
@@ -2268,7 +2298,7 @@ func (c *benchCmd) jsPublisher(nc *nats.Conn, progress *uiprogress.Bar, jsPubTyp
 	return latencies, nil
 }
 
-func (c *benchCmd) kvPutter(nc *nats.Conn, progress *uiprogress.Bar, msg []byte, numMsg int, offset int) ([]uint64, error) {
+func (c *benchCmd) kvPutter(nc *nats.Conn, progress *uiprogress.Bar, msg []byte, numMsg int64, offset int64) ([]uint64, error) {
 	ctx := context.Background()
 
 	js, err := c.getJS(nc)
@@ -2291,11 +2321,11 @@ func (c *benchCmd) kvPutter(nc *nats.Conn, progress *uiprogress.Bar, msg []byte,
 	latencies := make([]uint64, numMsg)
 	throttler := newRateThrottler(c.perClientThroughput())
 
-	for i := 0; i < numMsg; i++ {
+	for i := int64(0); i < numMsg; i++ {
 		key := offset + i
 
 		if c.randomize > 0 {
-			key = rand.IntN(c.randomize)
+			key = int64(rand.IntN(c.randomize))
 		}
 
 		start := time.Now()
@@ -2317,7 +2347,7 @@ func (c *benchCmd) kvPutter(nc *nats.Conn, progress *uiprogress.Bar, msg []byte,
 	return latencies, nil
 }
 
-func (c *benchCmd) runCorePublisher(bm *bench.BenchmarkResults, errChan chan error, nc *nats.Conn, startwg *sync.WaitGroup, donewg *sync.WaitGroup, trigger chan struct{}, numMsg int, offset int, clientNumber int) {
+func (c *benchCmd) runCorePublisher(bm *bench.BenchmarkResults, errChan chan error, nc *nats.Conn, startwg *sync.WaitGroup, donewg *sync.WaitGroup, trigger chan struct{}, numMsg int64, offset int64, clientNumber int) {
 	startwg.Done()
 	var progress *uiprogress.Bar
 
@@ -2329,7 +2359,7 @@ func (c *benchCmd) runCorePublisher(bm *bench.BenchmarkResults, errChan chan err
 			barTotal = 1
 		}
 
-		progress = uiprogress.AddBar(barTotal).AppendCompleted().PrependElapsed()
+		progress = uiprogress.AddBar(int(barTotal)).AppendCompleted().PrependElapsed()
 		progress.Width = iu.ProgressWidth()
 
 		if numMsg == 0 {
@@ -2369,21 +2399,21 @@ func (c *benchCmd) runCorePublisher(bm *bench.BenchmarkResults, errChan chan err
 		return
 	}
 
-	bm.AddSample(bench.NewSample(numMsg, c.msgSize, start, time.Now(), latencies, nc))
+	bm.AddSample(bench.NewSample(int(numMsg), c.msgSize, start, time.Now(), latencies, nc))
 
 	donewg.Done()
 	errChan <- nil
 }
 
-func (c *benchCmd) runCoreSubscriber(bm *bench.BenchmarkResults, errChan chan error, nc *nats.Conn, startwg *sync.WaitGroup, donewg *sync.WaitGroup, numMsg int, clientNumber int) {
-	received := 0
+func (c *benchCmd) runCoreSubscriber(bm *bench.BenchmarkResults, errChan chan error, nc *nats.Conn, startwg *sync.WaitGroup, donewg *sync.WaitGroup, numMsg int64, clientNumber int) {
+	received := int64(0)
 	ch := make(chan time.Time, 2)
 	var progress *uiprogress.Bar
 
 	log.Printf("[%d] Starting %s, expecting %s messages", clientNumber+1, bench.GetBenchTypeLabel(bench.TypeCoreSub), f(numMsg))
 
 	if c.progressBar {
-		progress = uiprogress.AddBar(numMsg).AppendCompleted().PrependElapsed()
+		progress = uiprogress.AddBar(int(numMsg)).AppendCompleted().PrependElapsed()
 		progress.Width = iu.ProgressWidth()
 	}
 
@@ -2445,20 +2475,20 @@ func (c *benchCmd) runCoreSubscriber(bm *bench.BenchmarkResults, errChan chan er
 
 	state = "Finished  "
 
-	bm.AddSample(bench.NewSample(numMsg, c.msgSize, start, end, []uint64{}, nc))
+	bm.AddSample(bench.NewSample(int(numMsg), c.msgSize, start, end, []uint64{}, nc))
 
 	donewg.Done()
 	errChan <- nil
 }
 
-func (c *benchCmd) runCoreRequester(bm *bench.BenchmarkResults, errChan chan error, nc *nats.Conn, startwg *sync.WaitGroup, donewg *sync.WaitGroup, trigger chan struct{}, numMsg int, offset int, clientNumber int) {
+func (c *benchCmd) runCoreRequester(bm *bench.BenchmarkResults, errChan chan error, nc *nats.Conn, startwg *sync.WaitGroup, donewg *sync.WaitGroup, trigger chan struct{}, numMsg int64, offset int64, clientNumber int) {
 	startwg.Done()
 	var progress *uiprogress.Bar
 
 	log.Printf("[%d] Starting %s, requesting %s messages", clientNumber+1, bench.GetBenchTypeLabel(bench.TypeServiceRequest), f(numMsg))
 
 	if c.progressBar {
-		progress = uiprogress.AddBar(numMsg).AppendCompleted().PrependElapsed()
+		progress = uiprogress.AddBar(int(numMsg)).AppendCompleted().PrependElapsed()
 		progress.Width = iu.ProgressWidth()
 	}
 
@@ -2485,7 +2515,7 @@ func (c *benchCmd) runCoreRequester(bm *bench.BenchmarkResults, errChan chan err
 		return
 	}
 
-	bm.AddSample(bench.NewSample(numMsg, c.msgSize, start, time.Now(), latencies, nc))
+	bm.AddSample(bench.NewSample(int(numMsg), c.msgSize, start, time.Now(), latencies, nc))
 
 	donewg.Done()
 	errChan <- nil
@@ -2538,14 +2568,14 @@ func (c *benchCmd) runServiceServer(nc *nats.Conn, errChan chan error, startwg *
 	errChan <- nil
 }
 
-func (c *benchCmd) runJSPublisher(bm *bench.BenchmarkResults, errChan chan error, nc *nats.Conn, startwg *sync.WaitGroup, donewg *sync.WaitGroup, trigger chan struct{}, benchType string, numMsg int, offset int, idPrefix string, clientNumber int) {
+func (c *benchCmd) runJSPublisher(bm *bench.BenchmarkResults, errChan chan error, nc *nats.Conn, startwg *sync.WaitGroup, donewg *sync.WaitGroup, trigger chan struct{}, benchType string, numMsg int64, offset int64, idPrefix string, clientNumber int) {
 	startwg.Done()
 	var progress *uiprogress.Bar
 
 	log.Printf("[%d] Starting %s, publishing %s messages", clientNumber+1, bench.GetBenchTypeLabel(benchType), f(numMsg))
 
 	if c.progressBar {
-		progress = uiprogress.AddBar(numMsg).AppendCompleted().PrependElapsed()
+		progress = uiprogress.AddBar(int(numMsg)).AppendCompleted().PrependElapsed()
 		progress.Width = iu.ProgressWidth()
 	}
 
@@ -2572,21 +2602,21 @@ func (c *benchCmd) runJSPublisher(bm *bench.BenchmarkResults, errChan chan error
 		return
 	}
 
-	bm.AddSample(bench.NewSample(numMsg, c.msgSize, start, time.Now(), latencies, nc))
+	bm.AddSample(bench.NewSample(int(numMsg), c.msgSize, start, time.Now(), latencies, nc))
 
 	donewg.Done()
 	errChan <- nil
 }
 
-func (c *benchCmd) runJSSubscriber(bm *bench.BenchmarkResults, errChan chan error, nc *nats.Conn, startwg *sync.WaitGroup, donewg *sync.WaitGroup, benchType string, numMsg int, clientNumber int) {
-	received := 0
+func (c *benchCmd) runJSSubscriber(bm *bench.BenchmarkResults, errChan chan error, nc *nats.Conn, startwg *sync.WaitGroup, donewg *sync.WaitGroup, benchType string, numMsg int64, clientNumber int) {
+	received := int64(0)
 	ch := make(chan time.Time, 2)
 	var progress *uiprogress.Bar
 
-	log.Printf("[%d] Starting %s, expecting %s messages", clientNumber+1, bench.GetBenchTypeLabel(benchType), humanize.Comma(int64(numMsg)))
+	log.Printf("[%d] Starting %s, expecting %s messages", clientNumber+1, bench.GetBenchTypeLabel(benchType), humanize.Comma(numMsg))
 
 	if c.progressBar {
-		progress = uiprogress.AddBar(numMsg).AppendCompleted().PrependElapsed()
+		progress = uiprogress.AddBar(int(numMsg)).AppendCompleted().PrependElapsed()
 		progress.Width = iu.ProgressWidth()
 	}
 
@@ -2686,7 +2716,7 @@ func (c *benchCmd) runJSSubscriber(bm *bench.BenchmarkResults, errChan chan erro
 			return
 		}
 
-		cc, err := consumer.Consume(mh, jetstream.PullMaxMessages(c.batchSize), jetstream.StopAfter(numMsg))
+		cc, err := consumer.Consume(mh, jetstream.PullMaxMessages(c.batchSize), jetstream.StopAfter(int(numMsg)))
 		if err != nil {
 			errChan <- fmt.Errorf("calling Consume() on the durable consumer '%s': %w", c.consumerName, err)
 			startwg.Done()
@@ -2721,12 +2751,12 @@ func (c *benchCmd) runJSSubscriber(bm *bench.BenchmarkResults, errChan chan erro
 	if benchType == bench.TypeJSFetch {
 		latencies = make([]uint64, int(math.Ceil(float64(numMsg)/float64(c.batchSize))))
 
-		for i := 0; i < numMsg; {
+		for i := int64(0); i < numMsg; {
 			batchSize := func() int {
-				if c.batchSize <= (numMsg - i) {
+				if int64(c.batchSize) <= (numMsg - i) {
 					return c.batchSize
 				} else {
-					return numMsg - i
+					return int(numMsg - i)
 				}
 			}()
 
@@ -2767,20 +2797,20 @@ func (c *benchCmd) runJSSubscriber(bm *bench.BenchmarkResults, errChan chan erro
 
 	state = "Finished  "
 
-	bm.AddSample(bench.NewSample(numMsg, c.msgSize, start, end, latencies, nc))
+	bm.AddSample(bench.NewSample(int(numMsg), c.msgSize, start, end, latencies, nc))
 
 	donewg.Done()
 	errChan <- nil
 }
 
-func (c *benchCmd) runJSGetter(bm *bench.BenchmarkResults, errChan chan error, nc *nats.Conn, startwg *sync.WaitGroup, donewg *sync.WaitGroup, benchType string, numMsg int, clientNumber int) {
+func (c *benchCmd) runJSGetter(bm *bench.BenchmarkResults, errChan chan error, nc *nats.Conn, startwg *sync.WaitGroup, donewg *sync.WaitGroup, benchType string, numMsg int64, clientNumber int) {
 	ch := make(chan time.Time, 2)
 	var progress *uiprogress.Bar
 
 	log.Printf("[%d] Starting %s, expecting %s messages", clientNumber+1, bench.GetBenchTypeLabel(benchType), f(numMsg))
 
 	if c.progressBar {
-		progress = uiprogress.AddBar(numMsg).AppendCompleted().PrependElapsed()
+		progress = uiprogress.AddBar(int(numMsg)).AppendCompleted().PrependElapsed()
 		progress.Width = iu.ProgressWidth()
 	}
 
@@ -2869,12 +2899,12 @@ func (c *benchCmd) runJSGetter(bm *bench.BenchmarkResults, errChan chan error, n
 		var nextSeq uint64 = 1
 		latencies = make([]uint64, int(math.Ceil(float64(numMsg)/float64(c.batchSize))))
 
-		for i := 0; i < numMsg; {
+		for i := int64(0); i < numMsg; {
 			batchSize := func() int {
-				if c.batchSize <= (numMsg - i) {
+				if int64(c.batchSize) <= (numMsg - i) {
 					return c.batchSize
 				} else {
-					return numMsg - i
+					return int(numMsg - i)
 				}
 			}()
 
@@ -2935,20 +2965,20 @@ func (c *benchCmd) runJSGetter(bm *bench.BenchmarkResults, errChan chan error, n
 
 	state = "Finished  "
 
-	bm.AddSample(bench.NewSample(numMsg, c.msgSize, start, end, latencies, nc))
+	bm.AddSample(bench.NewSample(int(numMsg), c.msgSize, start, end, latencies, nc))
 
 	donewg.Done()
 	errChan <- nil
 }
 
-func (c *benchCmd) runKVPutter(bm *bench.BenchmarkResults, errChan chan error, nc *nats.Conn, startwg *sync.WaitGroup, donewg *sync.WaitGroup, trigger chan struct{}, numMsg int, offset int, clientNumber int) {
+func (c *benchCmd) runKVPutter(bm *bench.BenchmarkResults, errChan chan error, nc *nats.Conn, startwg *sync.WaitGroup, donewg *sync.WaitGroup, trigger chan struct{}, numMsg int64, offset int64, clientNumber int) {
 	startwg.Done()
 	var progress *uiprogress.Bar
 
 	log.Printf("[%d] Starting %s, publishing %s messages", clientNumber+1, bench.GetBenchTypeLabel(bench.TypeKVPut), f(numMsg))
 
 	if c.progressBar {
-		progress = uiprogress.AddBar(numMsg).AppendCompleted().PrependElapsed()
+		progress = uiprogress.AddBar(int(numMsg)).AppendCompleted().PrependElapsed()
 		progress.Width = iu.ProgressWidth()
 	}
 
@@ -2980,20 +3010,20 @@ func (c *benchCmd) runKVPutter(bm *bench.BenchmarkResults, errChan chan error, n
 		return
 	}
 
-	bm.AddSample(bench.NewSample(numMsg, c.msgSize, start, time.Now(), latencies, nc))
+	bm.AddSample(bench.NewSample(int(numMsg), c.msgSize, start, time.Now(), latencies, nc))
 
 	donewg.Done()
 	errChan <- nil
 }
 
-func (c *benchCmd) runKVGetter(bm *bench.BenchmarkResults, errChan chan error, nc *nats.Conn, startwg *sync.WaitGroup, donewg *sync.WaitGroup, numMsg int, offset int, clientNumber int) {
+func (c *benchCmd) runKVGetter(bm *bench.BenchmarkResults, errChan chan error, nc *nats.Conn, startwg *sync.WaitGroup, donewg *sync.WaitGroup, numMsg int64, offset int64, clientNumber int) {
 	ch := make(chan time.Time, 2)
 	var progress *uiprogress.Bar
 
 	log.Printf("[%d] Starting %s, trying to get %s messages", clientNumber+1, bench.GetBenchTypeLabel(bench.TypeKVGet), f(numMsg))
 
 	if c.progressBar {
-		progress = uiprogress.AddBar(numMsg).AppendCompleted().PrependElapsed()
+		progress = uiprogress.AddBar(int(numMsg)).AppendCompleted().PrependElapsed()
 		progress.Width = iu.ProgressWidth()
 	}
 
@@ -3036,7 +3066,7 @@ func (c *benchCmd) runKVGetter(bm *bench.BenchmarkResults, errChan chan error, n
 
 	state = "Getting   "
 
-	for i := 0; i < numMsg; i++ {
+	for i := int64(0); i < numMsg; i++ {
 		var key string
 
 		if c.randomize == 0 {
@@ -3072,21 +3102,21 @@ func (c *benchCmd) runKVGetter(bm *bench.BenchmarkResults, errChan chan error, n
 
 	state = "Finished  "
 
-	bm.AddSample(bench.NewSample(numMsg, c.msgSize, start, end, latencies, nc))
+	bm.AddSample(bench.NewSample(int(numMsg), c.msgSize, start, end, latencies, nc))
 
 	donewg.Done()
 	errChan <- nil
 }
 
-func (c *benchCmd) runOldJSSubscriber(bm *bench.BenchmarkResults, errChan chan error, nc *nats.Conn, startwg *sync.WaitGroup, donewg *sync.WaitGroup, numMsg int, benchType string, clientNumber int) {
-	received := 0
+func (c *benchCmd) runOldJSSubscriber(bm *bench.BenchmarkResults, errChan chan error, nc *nats.Conn, startwg *sync.WaitGroup, donewg *sync.WaitGroup, numMsg int64, benchType string, clientNumber int) {
+	received := int64(0)
 	ch := make(chan time.Time, 2)
 	var progress *uiprogress.Bar
 
 	log.Printf("[%d] Starting %s, expecting %s messages", clientNumber+1, bench.GetBenchTypeLabel(benchType), f(numMsg))
 
 	if c.progressBar {
-		progress = uiprogress.AddBar(numMsg).AppendCompleted().PrependElapsed()
+		progress = uiprogress.AddBar(int(numMsg)).AppendCompleted().PrependElapsed()
 		progress.Width = iu.ProgressWidth()
 	}
 
@@ -3187,7 +3217,7 @@ func (c *benchCmd) runOldJSSubscriber(bm *bench.BenchmarkResults, errChan chan e
 			donewg.Done()
 			return
 		}
-		_ = sub.AutoUnsubscribe(numMsg)
+		_ = sub.AutoUnsubscribe(int(numMsg))
 
 	} else { // benchType == benchTypeOldJSOrdered
 		state = "Consuming "
@@ -3220,12 +3250,12 @@ func (c *benchCmd) runOldJSSubscriber(bm *bench.BenchmarkResults, errChan chan e
 	startwg.Done()
 
 	if benchType == bench.TypeOldJSPull {
-		for i := 0; i < numMsg; {
+		for i := int64(0); i < numMsg; {
 			batchSize := func() int {
-				if c.batchSize <= (numMsg - i) {
+				if int64(c.batchSize) <= (numMsg - i) {
 					return c.batchSize
 				} else {
-					return numMsg - i
+					return int(numMsg - i)
 				}
 			}()
 
@@ -3264,24 +3294,24 @@ func (c *benchCmd) runOldJSSubscriber(bm *bench.BenchmarkResults, errChan chan e
 
 	state = "Finished  "
 
-	bm.AddSample(bench.NewSample(numMsg, c.msgSize, start, end, []uint64{}, nc))
+	bm.AddSample(bench.NewSample(int(numMsg), c.msgSize, start, end, []uint64{}, nc))
 
 	donewg.Done()
 	errChan <- nil
 }
 
 // msgsPerClient divides the number of messages by the number of clients and tries to distribute them as evenly as possible
-func msgsPerClient(numMsgs, numClients int) []int {
-	var counts []int
+func msgsPerClient(numMsgs int64, numClients int) []int64 {
+	var counts []int64
 	if numClients == 0 || numMsgs == 0 {
 		return counts
 	}
-	counts = make([]int, numClients)
-	mc := numMsgs / numClients
+	counts = make([]int64, numClients)
+	mc := numMsgs / int64(numClients)
 	for i := 0; i < numClients; i++ {
 		counts[i] = mc
 	}
-	extra := numMsgs % numClients
+	extra := int(numMsgs % int64(numClients))
 	for i := 0; i < extra; i++ {
 		counts[i]++
 	}

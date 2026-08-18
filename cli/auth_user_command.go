@@ -391,11 +391,11 @@ func (c *authUserCommand) addAction(cmd *cobra.Command, args []string) error {
 	}
 
 	if c.signingKey != "" {
-		sk, err := au.SelectSigningKey(acct, c.signingKey)
+		_, key, err := au.SelectSigningKey(acct, c.signingKey, false)
 		if err != nil {
 			return err
 		}
-		c.signingKey = sk.Key()
+		c.signingKey = key
 	}
 
 	if c.signingKey == "" {
