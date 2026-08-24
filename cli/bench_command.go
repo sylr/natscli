@@ -130,13 +130,16 @@ func (c *benchCmd) perClientThroughput() float64 {
 func configureBenchCommand(app commandHost) {
 	c := &benchCmd{}
 
+	// Common flags are registered on group commands (js, kv, service, oldjs) as
+	// persistent flags so subcommands inherit them; cobra's local Flags() do not
+	// cascade to children the way fisk's did.
 	addCommonFlags := func(f *cobra.Command) {
 		cmdAddTags(f, "scope:user", "impact:rw")
-		f.Flags().IntVar(&c.numClients, "clients", 1, "Number of concurrent clients")
-		f.Flags().Int64Var(&c.numMsg, "msgs", 100000, "Number of messages to publish or subscribe to")
-		negatableBoolVar(f, &c.progressBar, "progress", true, "Enable or disable the progress bar")
-		f.Flags().StringVar(&c.csvFile, "csv", "", "Save benchmark data to CSV file")
-		f.Flags().StringVar(&c.msgSizeString, "size", "128B", "Size of the test messages")
+		f.PersistentFlags().IntVar(&c.numClients, "clients", 1, "Number of concurrent clients")
+		f.PersistentFlags().Int64Var(&c.numMsg, "msgs", 100000, "Number of messages to publish or subscribe to")
+		negatablePersistentBoolVar(f, &c.progressBar, "progress", true, "Enable or disable the progress bar")
+		f.PersistentFlags().StringVar(&c.csvFile, "csv", "", "Save benchmark data to CSV file")
+		f.PersistentFlags().StringVar(&c.msgSizeString, "size", "128B", "Size of the test messages")
 		// TODO: support randomized payload data
 	}
 
@@ -156,8 +159,8 @@ func configureBenchCommand(app commandHost) {
 	}
 
 	addJSCommonFlags := func(f *cobra.Command) {
-		f.Flags().StringVar(&c.streamOrBucketName, "stream", bench.DefaultStreamName, "The name of the stream to create or use")
-		f.Flags().DurationVar(&c.sleep, "sleep", 0*time.Second, "Sleep for the specified interval between publications")
+		f.PersistentFlags().StringVar(&c.streamOrBucketName, "stream", bench.DefaultStreamName, "The name of the stream to create or use")
+		f.PersistentFlags().DurationVar(&c.sleep, "sleep", 0*time.Second, "Sleep for the specified interval between publications")
 		flagPlaceholder(f, "sleep", "DURATION")
 	}
 
@@ -212,7 +215,7 @@ func configureBenchCommand(app commandHost) {
 	addCommonFlags(coreSub)
 
 	microService := addCommand(benchCommand, "service", "Micro-service mode")
-	microService.Flags().DurationVar(&c.sleep, "sleep", 0*time.Second, "Sleep for the specified interval between requests or before replying to the request")
+	microService.PersistentFlags().DurationVar(&c.sleep, "sleep", 0*time.Second, "Sleep for the specified interval between requests or before replying to the request")
 	flagPlaceholder(microService, "sleep", "DURATION")
 	addCommonFlags(microService)
 
@@ -292,8 +295,8 @@ func configureBenchCommand(app commandHost) {
 
 	kvCommand := addCommand(benchCommand, "kv", "KV benchmark operations")
 	addCommonFlags(kvCommand)
-	kvCommand.Flags().StringVar(&c.streamOrBucketName, "bucket", bench.DefaultBucketName, "The bucket to use for the benchmark")
-	kvCommand.Flags().DurationVar(&c.sleep, "sleep", 0*time.Second, "Sleep for the specified interval after putting each message")
+	kvCommand.PersistentFlags().StringVar(&c.streamOrBucketName, "bucket", bench.DefaultBucketName, "The bucket to use for the benchmark")
+	kvCommand.PersistentFlags().DurationVar(&c.sleep, "sleep", 0*time.Second, "Sleep for the specified interval after putting each message")
 	flagPlaceholder(kvCommand, "sleep", "DURATION")
 
 	kvput := addCommand(kvCommand, "put", "Put messages in a KV bucket")
