@@ -2177,6 +2177,10 @@ func (c *streamCmd) copyAndEditStream(cfg api.StreamConfig) (api.StreamConfig, e
 		}
 	}
 
+	if c.noRepub {
+		cfg.RePublish = nil
+	}
+
 	if !c.noRepub && c.repubSource != "" && c.repubDest != "" {
 		cfg.RePublish = &api.RePublish{
 			Source:      c.repubSource,
