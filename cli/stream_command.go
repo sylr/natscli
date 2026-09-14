@@ -23,6 +23,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -539,6 +540,14 @@ Finding streams with certain subjects configured:
 	addArg(strClusterRemovePeer, "stream", "The stream to act on", false, "string")
 	addArg(strClusterRemovePeer, "peer", "The name of the peer to remove", false, "string")
 	negatableBoolVarP(strClusterRemovePeer, &c.force, "force", "f", false, "Force sealing without prompting")
+	strClusterRemovePeer.Hidden = true
+
+	strClusterEvacuatePeer := addCommand(strCluster, "evacuate", "Removes a stream from a peer")
+	strClusterEvacuatePeer.RunE = c.evacuatePeer
+	cmdAddTags(strClusterEvacuatePeer, "scope:user", "impact:rw")
+	addArg(strClusterEvacuatePeer, "stream", "The stream to act on", false, "string")
+	addArg(strClusterEvacuatePeer, "peer", "The name of the peer to remove", false, "string")
+	strClusterEvacuatePeer.Flags().BoolVarP(&c.force, "force", "f", false, "Force evacuation without prompt")
 }
 
 func init() {
@@ -1168,7 +1177,7 @@ func (c *streamCmd) leaderStandDown(_ *cobra.Command, args []string) error {
 	return c.showStream(stream)
 }
 
-func (c *streamCmd) removePeer(_ *cobra.Command, args []string) error {
+func (c *streamCmd) evacuatePeer(_ *cobra.Command, args []string) error {
 	c.stream = argValue(args, 0)
 	c.peerName = argValue(args, 1)
 
@@ -1185,6 +1194,91 @@ func (c *streamCmd) removePeer(_ *cobra.Command, args []string) error {
 	}
 
 	if info.Cluster == nil {
+		return fmt.Errorf("stream %q is not clustered", stream.Name())
+	}
+
+	peerNames := []string{info.Cluster.Leader}
+	for _, r := range info.Cluster.Replicas {
+		peerNames = append(peerNames, r.Name)
+	}
+
+	if c.peerName == "" {
+		err = iu.AskOne(&survey.Select{
+			Message: "Select a Peer",
+			Options: peerNames,
+		}, &c.peerName)
+		if err != nil {
+			return err
+		}
+	}
+
+	log.Printf("Evacuating stream from peer %q", c.peerName)
+
+	if !c.force {
+		ok, err := askConfirmation(fmt.Sprintf("Really evacuate %q", c.peerName), false)
+		fatalIfError(err, "could not obtain confirmation")
+
+		if !ok {
+			return nil
+		}
+	}
+
+	err = stream.EvacuatePeer(c.peerName)
+	if err != nil {
+		return err
+	}
+
+	log.Printf("Requested evacuation of peer %q", c.peerName)
+
+	log.Printf("Waiting up to 1 minute for peer state to change")
+	fmt.Println()
+	ticker := time.NewTicker(1 * time.Second)
+	to := time.NewTimer(time.Minute)
+	for {
+		select {
+		case <-ticker.C:
+			nfo, err := stream.Information()
+			if err == nil {
+				peers := []string{nfo.Cluster.Leader}
+				for _, p := range nfo.Cluster.Replicas {
+					peers = append(peers, p.Name)
+				}
+
+				if !slices.Contains(peers, c.peerName) {
+					fmt.Println()
+					fmt.Println()
+					fmt.Printf("Stream peers are now: %s\n", strings.Join(peers, ", "))
+					return nil
+				}
+				fmt.Print(".")
+			}
+		case <-to.C:
+			return fmt.Errorf("stream failed to evacuate %q, review stream state using 'nats stream info'", c.peerName)
+		}
+	}
+}
+
+func (c *streamCmd) removePeer(_ *cobra.Command, args []string) error {
+	c.stream = argValue(args, 0)
+	c.peerName = argValue(args, 1)
+
+	fmt.Println("WARNING: Users should use the new `nats stream cluster evacuate` and replica count adjustments")
+	fmt.Println("for peer membership management which is a newer and safer approach.")
+	fmt.Println()
+
+	c.connectAndAskStream()
+
+	stream, err := c.loadStream(c.stream)
+	if err != nil {
+		return err
+	}
+
+	info, err := stream.Information()
+	if err != nil {
+		return err
+	}
+
+	if info.Cluster == nil || len(info.Cluster.Replicas) == 0 {
 		return fmt.Errorf("stream %q is not clustered", stream.Name())
 	}
 
@@ -2308,6 +2402,7 @@ func (c *streamCmd) showStreamConfig(cols *columns.Writer, cfg api.StreamConfig)
 	if cfg.Placement != nil {
 		cols.AddRowIfNotEmpty("Placement Cluster", cfg.Placement.Cluster)
 		cols.AddRowIf("Placement Tags", cfg.Placement.Tags, len(cfg.Placement.Tags) > 0)
+		cols.AddRowIfNotEmpty("Preferred", cfg.Placement.Preferred)
 	}
 
 	cols.AddSectionTitle("Options")
@@ -2461,6 +2556,57 @@ func (c *streamCmd) showStream(stream *jsm.Stream) error {
 	return nil
 }
 
+func (c *streamCmd) showSource(cols *columns.Writer, s *api.StreamSourceInfo) {
+	cols.AddRow("Stream Name", s.Name)
+
+	switch {
+	case s.FilterSubject != "":
+		filter := ">"
+		if s.FilterSubject != "" {
+			filter = s.FilterSubject
+		}
+
+		cols.AddRow("Subject Filter", filter)
+	case len(s.SubjectTransforms) > 0:
+		for i := range s.SubjectTransforms {
+			t := ""
+
+			if i == 0 {
+				if len(s.SubjectTransforms) > 1 {
+					t = "Subject Filters and Transforms"
+				} else {
+					t = "Subject Filter and Transform"
+				}
+			}
+
+			if s.SubjectTransforms[i].Destination == "" {
+				cols.AddRowf(t, "%s untransformed", s.SubjectTransforms[i].Source)
+			} else {
+				cols.AddRowf(t, "%s to %s", s.SubjectTransforms[i].Source, s.SubjectTransforms[i].Destination)
+			}
+		}
+	}
+
+	cols.AddRow("Lag", s.Lag)
+
+	if s.Active > 0 && s.Active < math.MaxInt64 {
+		cols.AddRow("Last Seen", s.Active)
+	} else {
+		cols.AddRow("Last Seen", "never")
+	}
+
+	if s.External != nil {
+		cols.AddRow("Ext. API Prefix", s.External.ApiPrefix)
+		if s.External.DeliverPrefix != "" {
+			cols.AddRow("Ext. Delivery Prefix", s.External.DeliverPrefix)
+		}
+	}
+
+	if s.Error != nil {
+		cols.AddRow("Error", s.Error.Description)
+	}
+}
+
 func (c *streamCmd) showStreamInfo(info *api.StreamInfo) {
 	if c.json {
 		err := iu.PrintJSON(info)
@@ -2480,11 +2626,13 @@ func (c *streamCmd) showStreamInfo(info *api.StreamInfo) {
 		cols.AddSectionTitle("Cluster Information")
 		if info.Cluster != nil && info.Cluster.Name != "" {
 			cols.AddRow("Name", info.Cluster.Name)
+			cols.AddRowIf("Cluster Traffic Account", "System Account", info.Cluster.SystemAcc)
+			cols.AddRowIf("Cluster Traffic Account", info.Cluster.TrafficAcc, !info.Cluster.SystemAcc && info.Cluster.TrafficAcc != "")
 			cols.AddRowIfNotEmpty("Cluster Group", info.Cluster.RaftGroup)
 			if info.Cluster.LeaderSince == nil {
 				cols.AddRow("Leader", info.Cluster.Leader)
 			} else {
-				cols.AddRowf("Leader", "%s (%s)", info.Cluster.Leader, f(sinceRefOrNow(info.TimeStamp, *info.Cluster.LeaderSince)))
+				cols.AddRowf("Leader", "%s (%s)", info.Cluster.Leader, f(iu.SinceRefOrNow(info.TimeStamp, *info.Cluster.LeaderSince)))
 			}
 
 			for _, r := range info.Cluster.Replicas {
@@ -2506,6 +2654,10 @@ func (c *streamCmd) showStreamInfo(info *api.StreamInfo) {
 					state = append(state, "not seen")
 				}
 
+				if r.Pending {
+					state = append(state, "(pending)")
+				}
+
 				switch {
 				case r.Lag > 1:
 					state = append(state, fmt.Sprintf("%s operations behind", f(r.Lag)))
@@ -2516,69 +2668,23 @@ func (c *streamCmd) showStreamInfo(info *api.StreamInfo) {
 				cols.AddRow("Replica", state)
 			}
 		}
+
+		if info.Cluster.Desired != nil {
+			iu.RenderDesiredState(cols, info.Cluster.Desired, info.Config.Replicas, info.Config.Placement, &info.Config.Retention, info.Cluster, info.TimeStamp)
+		}
+
 		cols.Println()
-	}
-
-	showSource := func(s *api.StreamSourceInfo) {
-		cols.AddRow("Stream Name", s.Name)
-
-		switch {
-		case s.FilterSubject != "":
-			filter := ">"
-			if s.FilterSubject != "" {
-				filter = s.FilterSubject
-			}
-
-			cols.AddRow("Subject Filter", filter)
-		case len(s.SubjectTransforms) > 0:
-			for i := range s.SubjectTransforms {
-				t := ""
-
-				if i == 0 {
-					if len(s.SubjectTransforms) > 1 {
-						t = "Subject Filters and Transforms"
-					} else {
-						t = "Subject Filter and Transform"
-					}
-				}
-
-				if s.SubjectTransforms[i].Destination == "" {
-					cols.AddRowf(t, "%s untransformed", s.SubjectTransforms[i].Source)
-				} else {
-					cols.AddRowf(t, "%s to %s", s.SubjectTransforms[i].Source, s.SubjectTransforms[i].Destination)
-				}
-			}
-		}
-
-		cols.AddRow("Lag", s.Lag)
-
-		if s.Active > 0 && s.Active < math.MaxInt64 {
-			cols.AddRow("Last Seen", s.Active)
-		} else {
-			cols.AddRow("Last Seen", "never")
-		}
-
-		if s.External != nil {
-			cols.AddRow("Ext. API Prefix", s.External.ApiPrefix)
-			if s.External.DeliverPrefix != "" {
-				cols.AddRow("Ext. Delivery Prefix", s.External.DeliverPrefix)
-			}
-		}
-
-		if s.Error != nil {
-			cols.AddRow("Error", s.Error.Description)
-		}
 	}
 
 	if info.Mirror != nil {
 		cols.AddSectionTitle("Mirror Information")
-		showSource(info.Mirror)
+		c.showSource(cols, info.Mirror)
 	}
 
 	if len(info.Sources) > 0 {
 		cols.AddSectionTitle("Source Information")
 		for _, s := range info.Sources {
-			showSource(s)
+			c.showSource(cols, s)
 			cols.Println()
 		}
 	}
@@ -3640,7 +3746,7 @@ func (c *streamCmd) renderStreamsAsTable(streams []*jsm.Stream, missing []string
 	table.AddHeaders("Name", "Description", "Created", "Messages", "Size", "Last Message")
 	for _, s := range streams {
 		nfo, _ := s.LatestInformation()
-		table.AddRow(s.Name(), s.Description(), f(nfo.Created.Local()), f(nfo.State.Msgs), humanize.IBytes(nfo.State.Bytes), f(sinceRefOrNow(nfo.TimeStamp, nfo.State.LastTime)))
+		table.AddRow(s.Name(), s.Description(), f(nfo.Created.Local()), f(nfo.State.Msgs), humanize.IBytes(nfo.State.Bytes), f(iu.SinceRefOrNow(nfo.TimeStamp, nfo.State.LastTime)))
 	}
 
 	fmt.Fprintln(&out, table.Render())

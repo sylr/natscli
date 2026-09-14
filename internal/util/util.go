@@ -30,6 +30,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 	"unicode"
 
 	"github.com/AlecAivazis/survey/v2"
@@ -90,7 +91,12 @@ func versionComponents(version string) (major, minor, patch int, err error) {
 
 // ServerMinVersion checks if the connected server meets certain version constraints
 func ServerMinVersion(nc *nats.Conn, major, minor, patch int) bool {
-	smajor, sminor, spatch, _ := versionComponents(nc.ConnectedServerVersion())
+	return VersionIsAtLeast(nc.ConnectedServerVersion(), major, minor, patch)
+}
+
+// VersionIsAtLeast checks if supplied version meets certain version constraints
+func VersionIsAtLeast(version string, major, minor, patch int) bool {
+	smajor, sminor, spatch, _ := versionComponents(version)
 	if smajor < major || (smajor == major && sminor < minor) || (smajor == major && sminor == minor && spatch < patch) {
 		return false
 	}
@@ -690,4 +696,12 @@ func FmtReplicaDrift(replica, leader float64) string {
 	// strip . if it exists
 	pct = strings.TrimRight(pct, ".")
 	return fmt.Sprintf("%.0f (%s%%)", replica, pct)
+}
+
+// SinceRefOrNow returns a duration relative to given time or now
+func SinceRefOrNow(ref time.Time, ts time.Time) time.Duration {
+	if ref.IsZero() {
+		return time.Since(ts)
+	}
+	return ref.Sub(ts)
 }
