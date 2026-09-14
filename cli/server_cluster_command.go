@@ -30,7 +30,6 @@ import (
 )
 
 type SrvClusterCmd struct {
-	json              bool
 	force             bool
 	peer              string
 	placementCluster  string
@@ -74,7 +73,6 @@ func configureServerClusterCommand(srv *cobra.Command) {
 	sd.Flags().StringVar(&c.placementCluster, "cluster", "", "Request placement of the leader in a specific cluster")
 	sd.Flags().StringArrayVar(&c.placementTags, "tags", nil, "Request placement of the leader on nodes with specific tag(s)")
 	sd.Flags().StringVar(&c.placementNode, "host", "", "Request placement of the leader on a specific node")
-	sd.Flags().BoolVarP(&c.json, "json", "j", false, "Produce JSON output")
 	sd.Flags().BoolVarP(&c.force, "force", "f", false, "Force leader step down ignoring current leader")
 
 	rm := addCommand(cluster, "peer-remove", "Removes a server from a JetStream cluster")
@@ -83,7 +81,6 @@ func configureServerClusterCommand(srv *cobra.Command) {
 	cmdAddTags(rm, "scope:system", "impact:rw")
 	addArg(rm, "name", "The Server Name or ID to remove from the JetStream cluster", true, "string")
 	rm.Flags().BoolVarP(&c.force, "force", "f", false, "Force removal without prompting")
-	rm.Flags().BoolVarP(&c.json, "json", "j", false, "Produce JSON output")
 }
 
 func (c *SrvClusterCmd) balanceAction(_ *cobra.Command, args []string) error {
