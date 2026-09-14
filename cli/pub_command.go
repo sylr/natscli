@@ -16,6 +16,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"math/rand/v2"
 	"os/signal"
 	"syscall"
 	"time"
@@ -40,6 +41,8 @@ type pubCmd struct {
 	hdrs       []string
 	cnt        int
 	sleep      time.Duration
+	jitter     time.Duration
+	lastPub    time.Time
 	forceStdin bool
 	jetstream  bool
 	schedules  bool
@@ -100,6 +103,8 @@ Available template functions are:
 	pub.Flags().IntVar(&c.cnt, "count", 1, "Publish multiple messages")
 	pub.Flags().BoolVar(&c.forceStdin, "force-stdin", false, "Force reading from stdin")
 	pub.Flags().BoolVarP(&c.jetstream, "jetstream", "J", false, "Publish messages to JetStream")
+	pub.Flags().DurationVar(&c.jitter, "jitter", 0, "When publishing multiple messages, adds a random delay of up to this duration between publishes, in addition to --sleep")
+	flagPlaceholder(pub, "jitter", "DURATION")
 	pub.Flags().BoolVarP(&c.quiet, "quiet", "q", false, "Show just the output received")
 	pub.Flags().DurationVar(&c.scheduleAfter, "schedule-after", 0, "Schedule the message after a certain duration (implies --jetstream)")
 	flagPlaceholder(pub, "schedule-after", "DURATION")
@@ -122,6 +127,33 @@ Available template functions are:
 
 func init() {
 	registerCommand("pub", 11, configurePubCommand)
+}
+
+// delay returns the pause between publishes: the fixed --sleep duration
+// plus a random amount of up to --jitter.
+func (c *pubCmd) delay() time.Duration {
+	d := c.sleep
+	if c.jitter > 0 {
+		d += rand.N(c.jitter)
+	}
+
+	return d
+}
+
+// pauseBetweenPublishes sleeps so consecutive publishes are spaced by the
+// --sleep duration plus a random amount of up to --jitter, measured from when
+// the previous publish began. Time already spent since then, such as ack round
+// trips or waiting on stdin, is credited against the pause. The command's
+// first publish is never delayed, and neither is any publish once the
+// previous one is more than the target delay in the past.
+func (c *pubCmd) pauseBetweenPublishes() {
+	if !c.lastPub.IsZero() {
+		if st := c.delay() - time.Since(c.lastPub); st > 0 {
+			time.Sleep(st)
+		}
+	}
+
+	c.lastPub = time.Now()
 }
 
 func (c *pubCmd) writeAtomic(nc *nats.Conn) error {
@@ -267,7 +299,7 @@ func (c *pubCmd) addScheduleHeaders(msg *nats.Msg) error {
 
 func (c *pubCmd) doJetstream(nc *nats.Conn, pub *iu.Publisher) error {
 	for i := 1; i <= c.cnt; i++ {
-		start := time.Now()
+		c.pauseBetweenPublishes()
 		body, subj, bodyErr, subjErr := pub.ParseTemplates(c.body, c.subject, i)
 		if bodyErr != nil {
 			log.Printf("Could not parse body template: %s", bodyErr)
@@ -320,14 +352,6 @@ func (c *pubCmd) doJetstream(nc *nats.Conn, pub *iu.Publisher) error {
 				msg += fmt.Sprintf(" Counter Value: %s", ack.Value)
 			}
 			log.Printf("%s", msg)
-		}
-
-		// If applicable, account for the wait duration in a publish sleep.
-		if c.cnt > 1 && c.sleep > 0 {
-			st := c.sleep - time.Since(start)
-			if st > 0 {
-				time.Sleep(st)
-			}
 		}
 	}
 
@@ -441,6 +465,7 @@ func (c *pubCmd) publishNatsMsg(ctx context.Context, nc *nats.Conn, pub *iu.Publ
 					return err
 				}
 
+				c.pauseBetweenPublishes()
 				err = nc.PublishMsg(msg)
 				if err != nil {
 					return err
@@ -450,10 +475,6 @@ func (c *pubCmd) publishNatsMsg(ctx context.Context, nc *nats.Conn, pub *iu.Publ
 				err = nc.LastError()
 				if err != nil {
 					return err
-				}
-
-				if c.cnt > 1 && c.sleep > 0 {
-					time.Sleep(c.sleep)
 				}
 
 				tracker := pub.Tracker
