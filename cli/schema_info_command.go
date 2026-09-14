@@ -17,7 +17,7 @@ import (
 	"fmt"
 
 	"github.com/ghodss/yaml"
-	"github.com/nats-io/jsm.go/api"
+	"github.com/nats-io/jsm.go/registry"
 	"github.com/spf13/cobra"
 )
 
@@ -38,7 +38,7 @@ func configureSchemaInfoCommand(schema *cobra.Command) {
 func (c *schemaInfoCmd) info(_ *cobra.Command, args []string) error {
 	c.schema = args[0]
 
-	schema, err := api.Schema(c.schema)
+	schema, err := registry.Schema(c.schema)
 	if err != nil {
 		return fmt.Errorf("could not load schema %q: %s", c.schema, err)
 	}

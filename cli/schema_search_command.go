@@ -17,7 +17,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/nats-io/jsm.go/api"
+	"github.com/nats-io/jsm.go/registry"
 	iu "github.com/nats-io/natscli/internal/util"
 	"github.com/spf13/cobra"
 )
@@ -42,7 +42,7 @@ func (c *schemaSearchCmd) search(_ *cobra.Command, args []string) error {
 		c.filter = v
 	}
 
-	found, err := api.SchemaSearch(c.filter)
+	found, err := registry.SchemaSearch(c.filter)
 	if err != nil {
 		return fmt.Errorf("search failed: %s", err)
 	}

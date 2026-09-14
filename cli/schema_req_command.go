@@ -17,7 +17,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/nats-io/jsm.go/api"
+	"github.com/nats-io/jsm.go/registry"
 	"github.com/spf13/cobra"
 )
 
@@ -72,7 +72,7 @@ func (c *schemaReqCmd) requestAction(_ *cobra.Command, args []string) error {
 		fmt.Println()
 	}
 
-	schemaType, msg, err := api.ParseMessage(res.Data)
+	schemaType, msg, err := registry.ParseMessage(res.Data)
 	if err != nil {
 		return err
 	}
