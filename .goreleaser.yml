@@ -87,56 +87,43 @@ homebrew_casks:
     homepage: "https://github.com/sylr/natscli"
     description: "NATS utility"
     skip_upload: auto
-    url:
-      verified: github.com/sylr/natscli/
     repository:
       owner: sylr
       name: homebrew-tap
       token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
-    hooks:
-      # postflight runs after the binary artifact is staged (see Cask::Installer). Strip quarantine,
-      # then run the same completion flow as `generate_completions_from_executable` (:cobra) so we
-      # never exec the quarantined binary during earlier artifact phases (SIGKILL / sort-order ties).
-      post:
-        install: |
-          if OS.mac?
-            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}"]
-            nats = staged_path.glob("nats-*/nats").first
-            nats ||= staged_path/"nats"
-            raise "nats binary not found in #{staged_path}" unless nats.exist?
-
-            executable = nats.to_s
-            %i[bash zsh fish].each do |shell|
-              env = { "SHELL" => shell.to_s }
-              param = ::Utils::ShellCompletion.completion_shell_parameter(:cobra, shell, executable, env)
-              out = ::Utils::ShellCompletion.generate_completion_output([executable], param, env)
-              path = case shell
-              when :bash
-                ::Cask::Artifact::BashCompletion.new(cask, "nats").resolve_target("nats")
-              when :zsh
-                ::Cask::Artifact::ZshCompletion.new(cask, "nats").resolve_target("nats")
-              when :fish
-                ::Cask::Artifact::FishCompletion.new(cask, "nats").resolve_target("nats")
-              end
-              path.dirname.mkpath
-              path.write(out)
-            end
-          end
-      pre:
-        uninstall: |
-          if OS.mac?
-            %i[bash zsh fish].each do |shell|
-              path = case shell
-              when :bash
-                ::Cask::Artifact::BashCompletion.new(cask, "nats").resolve_target("nats")
-              when :zsh
-                ::Cask::Artifact::ZshCompletion.new(cask, "nats").resolve_target("nats")
-              when :fish
-                ::Cask::Artifact::FishCompletion.new(cask, "nats").resolve_target("nats")
-              end
-              ::Cask::Utils.gain_permissions_remove(path) if path.exist?
-            end
-          end
+    # Homebrew deprecated the `postflight` / `uninstall_preflight` stanzas that
+    # GoReleaser's `hooks:` emits (`*_steps` replace them), and the replacements take a
+    # declarative step DSL instead of arbitrary Ruby, which GoReleaser cannot emit.
+    # Inject the stanza verbatim through custom_block instead.
+    #
+    # Quarantine must be stripped before any artifact execs the staged binary, or macOS
+    # SIGKILLs it (`generate_completions_from_executable` below runs it). `preflight_steps`
+    # is first in Homebrew's artifact sort order, so it wins over every other phase.
+    # `{{ `...` }}` protects Homebrew's own `{{token}}` placeholders from GoReleaser
+    # templating. Homebrew's `{{bash_completion}}` & co. are unusable here: in a cask they
+    # resolve against the same-named artifact stanzas and blow up.
+    #
+    # `-dr` on the single staged binary rather than on staged_path: recursive xattr follows
+    # symlinks out of the tree, and this is the only file that gets executed. `-r` is kept
+    # because plain `-d` exits 1 when the attribute is already absent.
+    custom_block: |
+      preflight_steps do
+        on_macos do
+          run "/usr/bin/xattr",
+              args: ["-dr", "com.apple.quarantine", "{{ `{{staged_path}}` }}/nats"]
+        end
+      end
+    # cobra already invokes the `completion` subcommand; extra args would produce
+    # `nats completion completion <shell>`. The archive is wrapped in a directory but the
+    # cask `rename` flattens it to `nats` at the staged root before artifacts install.
+    generate_completions_from_executable:
+      executable: nats
+      shell_parameter_format: cobra
+      base_name: nats
+      shells:
+      - bash
+      - zsh
+      - fish
 
 nfpms:
   - file_name_template: 'nats-v{{.Version}}-{{.Arch}}{{if .Arm}}{{.Arm}}{{end}}'
