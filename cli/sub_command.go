@@ -40,6 +40,7 @@ import (
 )
 
 type subCmd struct {
+	orderedMsgs           chan *nats.Msg
 	subjects              []string
 	queue                 string
 	durable               string
@@ -827,14 +828,31 @@ func (c *subCmd) setConsumerSubjects(info *jetstream.ConsumerInfo) error {
 	return nil
 }
 
+func (c *subCmd) handleInArrivalOrder(inbox *nats.Subscription, msgHandler nats.MsgHandler, replyHandler nats.MsgHandler) {
+	for m := range c.orderedMsgs {
+		if !m.Sub.IsValid() {
+			continue
+		}
+
+		if m.Sub == inbox {
+			replyHandler(m)
+		} else {
+			msgHandler(m)
+		}
+	}
+}
+
 func (c *subCmd) defaultSubscribe(nc *nats.Conn, handler nats.MsgHandler, subs *[]*nats.Subscription) error {
 	for _, subj := range c.subjects {
 		var sub *nats.Subscription
 		var err error
 
-		if c.queue == "" {
+		switch {
+		case c.orderedMsgs != nil:
+			sub, err = nc.ChanQueueSubscribe(subj, c.queue, c.orderedMsgs)
+		case c.queue == "":
 			sub, err = nc.Subscribe(subj, handler)
-		} else {
+		default:
 			sub, err = nc.QueueSubscribe(subj, c.queue, handler)
 		}
 		if err != nil {
@@ -1018,10 +1036,13 @@ func (c *subCmd) subscribe(_ *cobra.Command, args []string) error {
 			log.Printf("Matching replies with inbox prefix %v", inSubj)
 		}
 
-		_, err = nc.Subscribe(inSubj, matchHandler)
+		c.orderedMsgs = make(chan *nats.Msg, nats.DefaultSubPendingMsgsLimit)
+		inbox, err := nc.ChanSubscribe(inSubj, c.orderedMsgs)
 		if err != nil {
 			return err
 		}
+
+		go c.handleInArrivalOrder(inbox, msgHandler, matchHandler)
 	}
 
 	var ignoredSubjInfo string
