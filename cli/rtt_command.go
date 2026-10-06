@@ -39,6 +39,7 @@ type rttResult struct {
 	Address string        `json:"address"`
 	RTT     time.Duration `json:"rtt"`
 	URL     string        `json:"url"`
+	failed  bool
 }
 
 type rttTarget struct {
@@ -94,10 +95,10 @@ func (c *rttCmd) rtt(_ *cobra.Command, args []string) error {
 		fmt.Printf("%s:\n\n", t.URL)
 
 		for _, r := range t.Results {
-			if r.RTT > 0 {
-				fmt.Printf(format, r.Address, f(r.RTT))
-			} else {
+			if r.failed {
 				fmt.Printf(format, r.Address, "failed")
+			} else {
+				fmt.Printf(format, r.Address, f(r.RTT))
 			}
 		}
 
@@ -142,6 +143,7 @@ func (c *rttCmd) performTest(targets []*rttTarget) (err error) {
 			r.Time = time.Now()
 			r.URL, r.RTT, err = c.calcRTT(r.Address, opts)
 			if err != nil {
+				r.failed = true
 				log.Printf("Failed to compute rtt for %s: %v", r.Address, err)
 			}
 		}
