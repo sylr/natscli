@@ -1449,7 +1449,7 @@ func (c *SrvReportCmd) getConnz(limit int, nc *nats.Conn) (connzList, error) {
 	env := map[string]any{}
 
 	if !c.skipDiscoverClusterSize && c.waitFor == 0 && c.archivePath == "" {
-		c.waitFor, err = serverdata.CurrentActiveServers(ctx, nc, opts().Timeout, traceLogger())
+		c.waitFor, err = serverdata.CurrentActiveServers(ctx, nc, opts().Config.JSDomain(), opts().Timeout, traceLogger())
 		if err != nil {
 			return nil, err
 		}
@@ -1687,7 +1687,7 @@ func (c *SrvReportCmd) downgradeCheckAction(_ *cobra.Command, args []string) err
 		c.nc = nc
 
 		if c.waitFor == 0 {
-			c.waitFor, err = serverdata.CurrentActiveServers(ctx, nc, opts().Timeout, traceLogger())
+			c.waitFor, err = serverdata.CurrentActiveServers(ctx, nc, "", opts().Timeout, traceLogger())
 			if err != nil {
 				return fmt.Errorf("failed to get current active servers: %s", err)
 			}

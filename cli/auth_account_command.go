@@ -500,7 +500,7 @@ func (c *authAccountCommand) pushAction(_ *cobra.Command, args []string) error {
 		return err
 	}
 
-	expect, _ := serverdata.CurrentActiveServers(ctx, nc, opts().Timeout, traceLogger())
+	expect, _ := serverdata.CurrentActiveServers(ctx, nc, "", opts().Timeout, traceLogger())
 	if expect > 0 {
 		fmt.Printf("Updating account %s (%s) on %d server(s)\n", acct.Name(), acct.Subject(), expect)
 	} else {
