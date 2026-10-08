@@ -103,6 +103,30 @@ func configureServerClusterCommand(srv *cobra.Command) {
 	cmdAddTags(rescue, "scope:system", "impact:rw")
 }
 
+func (c *SrvClusterCmd) metaRescueDomainError(domain string, domains map[string]struct{}) error {
+	_, found := domains[domain]
+	_, noDomain := domains[""]
+
+	switch {
+	case domain == "" && len(domains) == 1 && !found:
+		return fmt.Errorf("servers are in domain %s, specify it using --js-domain", iu.MapKeys(domains)[0])
+	case domain != "" && len(domains) == 1 && noDomain:
+		return fmt.Errorf("servers are not in a JetStream domain, remove the domain set using --js-domain or the context")
+	case len(domains) > 1:
+		names := iu.MapKeys(domains)
+		slices.Sort(names)
+		for i, d := range names {
+			if d == "" {
+				names[i] = "no domain"
+			}
+		}
+
+		return fmt.Errorf("multiple domains found, pick one from %s", strings.Join(names, ", "))
+	default:
+		return fmt.Errorf("no compatible servers found")
+	}
+}
+
 func (c *SrvClusterCmd) metaRescueAction(_ *cobra.Command, _ []string) error {
 	nc, _, err := prepareHelper("", natsOpts()...)
 	if err != nil {
@@ -186,18 +210,7 @@ func (c *SrvClusterCmd) metaRescueAction(_ *cobra.Command, _ []string) error {
 	}
 
 	if matched == 0 {
-		if len(domains) > 1 {
-			names := iu.MapKeys(domains)
-			slices.Sort(names)
-			for i, d := range names {
-				if d == "" {
-					names[i] = "no domain"
-				}
-			}
-
-			return fmt.Errorf("multiple domains found, pick one from %s", strings.Join(names, ", "))
-		}
-		return fmt.Errorf("no compatible servers found")
+		return c.metaRescueDomainError(domain, domains)
 	}
 
 	fmt.Println(tbl.Render())
