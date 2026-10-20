@@ -15,6 +15,7 @@ package cli
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/nats-io/jsm.go/api"
 	gatherer "github.com/nats-io/jsm.go/audit/gather"
@@ -42,6 +43,7 @@ func configureAuditGatherCommand(app *cobra.Command) {
 	flagPlaceholder(gather, "cluster", "CLUSTER")
 	negatableBoolVar(gather, &c.config.Include.ServerEndpoints, "server-endpoints", true, "Capture monitoring endpoints for each server")
 	negatableBoolVar(gather, &c.config.Include.ServerProfiles, "server-profiles", true, "Capture profiles for each server")
+	gather.Flags().DurationVar(&c.config.CPUProfileDuration, "cpu-profile-duration", 5*time.Second, "Duration of the CPU profile captured from each server (max 15s)")
 	negatableBoolVar(gather, &c.config.Include.AccountEndpoints, "account-endpoints", true, "Capture monitoring endpoints for each account")
 	negatableBoolVar(gather, &c.config.Include.Streams, "streams", true, "Capture state of each stream")
 	negatableBoolVar(gather, &c.config.Include.Consumers, "consumers", true, "Capture state of each stream consumers")
