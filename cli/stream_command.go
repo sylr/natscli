@@ -509,6 +509,12 @@ Finding streams with certain subjects configured:
 	negatableBoolVar(strClusterBalance, &c.fInvert, "invert", false, "Invert the check - before becomes after, with becomes without")
 	strClusterBalance.Flags().StringVar(&c.fExpression, "expression", "", "Balance matching streams using an expression language")
 
+	strClusterCancelMove := addCommand(strCluster, "cancel-move", "Cancels an in-progress stream move")
+	strClusterCancelMove.RunE = c.cancelMove
+	cmdAddTags(strClusterCancelMove, "scope:user", "impact:rw")
+	addArg(strClusterCancelMove, "stream", "The stream to act on", false, "string")
+	strClusterCancelMove.Flags().BoolVarP(&c.force, "force", "f", false, "Force cancel without prompting or checks")
+
 	strClusterRemovePeer := addCommand(strCluster, "peer-remove", "Removes a peer from the stream cluster")
 	strClusterRemovePeer.Aliases = []string{"pr"}
 	strClusterRemovePeer.RunE = c.removePeer
@@ -1110,6 +1116,85 @@ func (c *streamCmd) leaderStandDown(_ *cobra.Command, args []string) error {
 
 	fmt.Println()
 	return c.showStream(stream)
+}
+
+func (c *streamCmd) cancelMove(_ *cobra.Command, args []string) error {
+	c.stream = argValue(args, 0)
+
+	c.connectAndAskStream()
+
+	var err error
+
+	if !c.force {
+		if c.selectedStream == nil {
+			c.selectedStream, err = c.mgr.LoadStream(c.stream)
+			if err != nil {
+				return err
+			}
+		}
+
+		nfo, err := c.selectedStream.Information()
+		if err != nil {
+			return err
+		}
+
+		if nfo.Cluster == nil {
+			return fmt.Errorf("stream is not clustered")
+		}
+
+		if nfo.Cluster.Desired == nil {
+			return fmt.Errorf("stream is not busy moving")
+		}
+
+		ok, err := askConfirmation(fmt.Sprintf("Really cancel move of %q", c.selectedStream.Name()), false)
+		fatalIfError(err, "could not obtain confirmation")
+
+		if !ok {
+			return fmt.Errorf("canceling request")
+		}
+	}
+
+	_, err = c.mgr.CancelStreamMove(c.stream)
+	if err != nil {
+		return err
+	}
+
+	fmt.Printf("Canceled move of %q\n", c.stream)
+
+	if !c.force {
+		ticker := time.NewTicker(500 * time.Millisecond)
+		defer ticker.Stop()
+
+		fmt.Print("Waiting for move to finish")
+
+		ctr := 0
+		for {
+			select {
+			case <-ticker.C:
+				ctr++
+				fmt.Print(".")
+				nfo, err := c.selectedStream.Information()
+				if err != nil {
+					continue
+				}
+
+				if nfo.Cluster == nil || nfo.Cluster.Desired == nil {
+					fmt.Println()
+					c.showStreamInfo(nfo)
+					return nil
+				}
+
+				if ctr == 20 {
+					fmt.Println("Canceling move did not complete, review status using 'nats stream info'")
+				}
+
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+	}
+
+	return nil
 }
 
 func (c *streamCmd) evacuatePeer(_ *cobra.Command, args []string) error {
