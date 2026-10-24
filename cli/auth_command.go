@@ -24,6 +24,7 @@ func configureAuthCommand(app commandHost) {
 	configureAuthAccountCommand(auth)
 	configureAuthUserCommand(auth)
 	configureAuthNkeyCommand(auth)
+	configureAuthNuidCommand(auth)
 }
 
 func init() {
