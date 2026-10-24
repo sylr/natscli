@@ -22,12 +22,10 @@ import (
 	"math"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"slices"
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 
@@ -86,10 +84,7 @@ type streamCmd struct {
 	reportLeaderDistrib    bool
 	discardPolicy          string
 	validateOnly           bool
-	backupDirectory        string
 	showProgress           bool
-	healthCheck            bool
-	snapShotConsumers      bool
 	dupeWindow             string
 	replicas               int64
 	placementCluster       string
@@ -163,8 +158,6 @@ type streamCmd struct {
 	selectedStream            *jsm.Stream
 	nc                        *nats.Conn
 	mgr                       *jsm.Manager
-	chunkSize                 string
-	wndSize                   string
 	placementPreferred        string
 	allowMsgTTlSet            bool
 	allowMsgTTL               bool
@@ -460,27 +453,10 @@ Finding streams with certain subjects configured:
 	strGet.Flags().BoolVarP(&c.json, "json", "j", false, "Produce JSON output")
 	strGet.Flags().StringVar(&c.vwTranslate, "translate", "", "Translate the message data by running it through the given command before output")
 
-	strBackup := addCommand(str, "backup", "Creates a backup of a stream over the NATS network")
-	strBackup.Aliases = []string{"snapshot"}
-	strBackup.RunE = c.backupAction
-	cmdAddTags(strBackup, "scope:user", "impact:ro")
-	addArg(strBackup, "stream", "Stream to backup", true, "string")
-	addArg(strBackup, "target", "Directory to create the backup in", true, "string")
-	negatableBoolVar(strBackup, &c.showProgress, "progress", true, "Enables or disables progress reporting using a progress bar")
-	strBackup.Flags().BoolVar(&c.healthCheck, "check", false, "Checks the stream for health prior to backup")
-	negatableBoolVar(strBackup, &c.snapShotConsumers, "consumers", true, "Enable or disable consumer backups")
-	strBackup.Flags().StringVar(&c.chunkSize, "chunk-size", "", "Sets a specific chunk size that the server will send")
-	strBackup.Flags().StringVar(&c.wndSize, "window-size", "", "Sets a specific window size that the server will send")
-
-	strRestore := addCommand(str, "restore", "Restore a stream over the NATS network")
-	strRestore.RunE = c.restoreAction
-	cmdAddTags(strRestore, "scope:user", "impact:rw")
-	addArg(strRestore, "file", "The directory holding the backup to restore", true, "path")
-	negatableBoolVar(strRestore, &c.showProgress, "progress", true, "Enables or disables progress reporting using a progress bar")
-	strRestore.Flags().Var(newExistingFileValue(&c.inputFile), "config", "Load a different configuration when restoring the stream")
-	strRestore.Flags().StringVar(&c.placementCluster, "cluster", "", "Place the stream in a specific cluster")
-	strRestore.Flags().StringArrayVar(&c.placementTags, "tag", nil, "Place the stream on servers that has specific tags (pass multiple times)")
-	strRestore.Flags().Int64Var(&c.replicas, "replicas", 0, "Override how many replicas of the data to create")
+	backup := &backupCmd{}
+	bkCmd := deprecatedCommand(backup.streamBackupCommand(str, "backup"), "nats stream backup", "nats backup stream")
+	bkCmd.Aliases = []string{"snapshot"}
+	deprecatedCommand(backup.streamRestoreCommand(str, "restore"), "nats stream restore", "nats backup restore stream")
 
 	strSeal := addCommand(str, "seal", "Seals a stream preventing further updates")
 	strSeal.RunE = c.sealAction
@@ -841,33 +817,9 @@ func (c *streamCmd) subjectsAction(_ *cobra.Command, args []string) (err error) 
 		return nil
 	}
 
-	var longest int
-	var most uint64
-	var names []string
-
-	for s, c := range subs {
+	names := make([]string, 0, len(subs))
+	for s := range subs {
 		names = append(names, s)
-		if len(s) > longest {
-			longest = len(s)
-		}
-		if c > most {
-			most = c
-		}
-	}
-
-	cols := 1
-	countWidth := len(f(most))
-	table := iu.NewTableWriterf(opts(), "%d Subjects in stream %s", len(names), c.stream)
-
-	switch {
-	case longest+countWidth < 20:
-		cols = 3
-		table.AddHeaders("Subject", "Count", "Subject", "Count", "Subject", "Count")
-	case longest+countWidth < 30:
-		cols = 2
-		table.AddHeaders("Subject", "Count", "Subject", "Count")
-	default:
-		table.AddHeaders("Subject", "Count")
 	}
 
 	sort.Slice(names, func(i, j int) bool {
@@ -885,24 +837,7 @@ func (c *streamCmd) subjectsAction(_ *cobra.Command, args []string) (err error) 
 		return
 	}
 
-	comma := func(i uint64) string {
-		if i == 0 {
-			return ""
-		}
-		return f(i)
-	}
-
-	iu.SliceGroups(names, cols, func(g []string) {
-		if cols == 1 {
-			table.AddRow(g[0], comma(subs[g[0]]))
-		} else if cols == 2 {
-			table.AddRow(g[0], comma(subs[g[0]]), g[1], comma(subs[g[1]]))
-		} else {
-			table.AddRow(g[0], comma(subs[g[0]]), g[1], comma(subs[g[1]]), g[2], comma(subs[g[2]]))
-		}
-	})
-
-	fmt.Println(table.Render())
+	fmt.Println(subjectsTable(fmt.Sprintf("%d Subjects in stream %s", len(names), c.stream), names, subs).Render())
 
 	return nil
 }
@@ -1455,260 +1390,6 @@ func (c *streamCmd) sealAction(_ *cobra.Command, args []string) error {
 	fatalIfError(err, "could not seal Stream")
 
 	return c.showStream(stream)
-}
-
-func (c *streamCmd) restoreAction(_ *cobra.Command, args []string) error {
-	// Called both as a command (positional directory arg) and internally by
-	// account restore which pre-sets backupDirectory and passes no args.
-	if len(args) > 0 {
-		c.backupDirectory = args[0]
-	}
-
-	_, mgr, err := prepareHelper("", natsOpts()...)
-	fatalIfError(err, "setup failed")
-
-	var bm api.JSApiStreamRestoreRequest
-	bmj, err := os.ReadFile(filepath.Join(c.backupDirectory, "backup.json"))
-	fatalIfError(err, "restore failed")
-	err = json.Unmarshal(bmj, &bm)
-	fatalIfError(err, "restore failed")
-
-	var cfg *api.StreamConfig
-
-	known, err := mgr.IsKnownStream(bm.Config.Name)
-	fatalIfError(err, "Could not check if the stream already exist")
-	if known {
-		fatalf("Stream %q already exist", bm.Config.Name)
-	}
-
-	var progbar progress.Writer
-	var tracker *progress.Tracker
-	var prevMsg time.Time
-
-	cb := func(p jsm.RestoreProgress) {
-		if opts().Trace && (p.ChunksSent()%100 == 0 || time.Since(prevMsg) > 500*time.Millisecond) {
-			fmt.Printf("Sent %v chunk %v / %v at %v / s\n", fiBytes(uint64(p.ChunkSize())), p.ChunksSent(), p.ChunksToSend(), fiBytes(p.BytesPerSecond()))
-			return
-		}
-
-		prevMsg = time.Now()
-
-		if progbar == nil {
-			progbar, tracker, _ = iu.NewProgress(opts(), &progress.Tracker{
-				Total: int64(p.ChunksToSend() * p.ChunkSize()),
-				Units: progress.UnitsBytes,
-			})
-		}
-
-		tracker.SetValue(int64(p.ChunksSent() * uint32(p.ChunkSize())))
-	}
-
-	var ropts []jsm.SnapshotOption
-
-	if c.showProgress {
-		ropts = append(ropts, jsm.RestoreNotify(cb))
-	} else {
-		ropts = append(ropts, jsm.SnapshotDebug())
-	}
-
-	if c.inputFile != "" {
-		cfg, err = c.loadConfigFile(c.inputFile)
-		if err != nil {
-			return err
-		}
-
-		// we need to confirm this new config has the same stream
-		// name as the snapshot else the server state can get confused
-		// see https://github.com/nats-io/nats-server/issues/2850
-		if bm.Config.Name != cfg.Name {
-			return fmt.Errorf("stream names may not be changed during restore")
-		}
-	} else {
-		cfg = &bm.Config
-	}
-
-	if c.placementCluster != "" || len(c.placementTags) > 0 {
-		cfg.Placement = &api.Placement{
-			Cluster: c.placementCluster,
-			Tags:    c.placementTags,
-		}
-	}
-
-	if c.replicas > 0 {
-		cfg.Replicas = int(c.replicas)
-	}
-
-	if cfg != nil {
-		ropts = append(ropts, jsm.RestoreConfiguration(*cfg))
-	}
-
-	fmt.Printf("Starting restore of Stream %q from file %q\n\n", bm.Config.Name, c.backupDirectory)
-
-	fp, _, err := mgr.RestoreSnapshotFromDirectory(ctx, bm.Config.Name, c.backupDirectory, ropts...)
-	fatalIfError(err, "restore failed")
-	if c.showProgress {
-		tracker.SetValue(int64(fp.ChunksSent() * uint32(fp.ChunkSize())))
-		time.Sleep(300 * time.Millisecond)
-		progbar.Stop()
-	}
-
-	fmt.Println()
-	fmt.Printf("Restored stream %q in %v\n", bm.Config.Name, fp.EndTime().Sub(fp.StartTime()).Round(time.Second))
-	fmt.Println()
-
-	stream, err := mgr.LoadStream(bm.Config.Name)
-	fatalIfError(err, "could not request Stream info")
-	err = c.showStream(stream)
-	fatalIfError(err, "could not show stream")
-
-	return nil
-}
-
-func backupStream(stream *jsm.Stream, showProgress bool, consumers bool, check bool, target string, chunkSize, wndSize int) error {
-	first := true
-	pmu := sync.Mutex{}
-	expected := 1
-	timedOut := false
-
-	var progbar progress.Writer
-	var tracker *progress.Tracker
-	var err error
-	var prevMsg time.Time
-
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
-	idleTimeout := 5 * time.Second
-	if opts().Timeout > idleTimeout {
-		idleTimeout = opts().Timeout
-	}
-
-	timeout := time.AfterFunc(idleTimeout, func() {
-		cancel()
-		timedOut = true
-	})
-
-	var received uint32
-
-	cb := func(p jsm.SnapshotProgress) {
-		if tracker == nil && showProgress {
-			if p.BytesExpected() > 0 {
-				expected = int(p.BytesExpected())
-			}
-			progbar, tracker, err = iu.NewProgress(opts(), &progress.Tracker{
-				Total: int64(expected),
-				Units: iu.ProgressUnitsIBytes,
-			})
-		}
-
-		if first {
-			fmt.Printf("Starting backup of Stream %q with %s\n", stream.Name(), humanize.IBytes(p.BytesExpected()))
-			if showProgress {
-				fmt.Println()
-			}
-
-			if p.HealthCheck() {
-				fmt.Printf("Health Check was requested, this can take a long time without progress reports\n\n")
-			}
-
-			first = false
-		}
-
-		if opts().Trace {
-			if first {
-				fmt.Printf("Received %s chunk %s\n", fiBytes(uint64(p.ChunkSize())), f(p.ChunksReceived()))
-			} else {
-				fmt.Printf("Received %s chunk %s with time delta %s\n", fiBytes(uint64(p.ChunkSize())), f(p.ChunksReceived()), time.Since(prevMsg))
-			}
-		}
-
-		if p.ChunksReceived() != received {
-			timeout.Reset(idleTimeout)
-			received = p.ChunksReceived()
-		}
-
-		if tracker != nil {
-			tracker.SetValue(int64(p.UncompressedBytesReceived()))
-		}
-
-		prevMsg = time.Now()
-	}
-
-	sopts := []jsm.SnapshotOption{
-		jsm.SnapshotChunkSize(chunkSize),
-		jsm.SnapshotWindowSize(wndSize),
-		jsm.SnapshotNotify(cb),
-	}
-
-	if consumers {
-		sopts = append(sopts, jsm.SnapshotConsumers())
-	}
-
-	if opts().Trace {
-		sopts = append(sopts, jsm.SnapshotDebug())
-		showProgress = false
-	}
-
-	if check {
-		sopts = append(sopts, jsm.SnapshotHealthCheck())
-	}
-
-	fp, err := stream.SnapshotToDirectory(ctx, target, sopts...)
-	if err != nil {
-		return err
-	}
-
-	pmu.Lock()
-	if tracker != nil {
-		tracker.SetValue(int64(expected))
-		tracker.MarkAsDone()
-		time.Sleep(300 * time.Millisecond)
-		progbar.Stop()
-	}
-	pmu.Unlock()
-
-	fmt.Println()
-
-	if timedOut {
-		return fmt.Errorf("backup timed out after receiving no data for a long period")
-	}
-
-	fmt.Printf("Received %s compressed data in %s chunks for stream %q in %v, %s uncompressed \n", humanize.IBytes(fp.BytesReceived()), f(fp.ChunksReceived()), stream.Name(), fp.EndTime().Sub(fp.StartTime()).Round(time.Millisecond), fiBytes(fp.UncompressedBytesReceived()))
-
-	return nil
-}
-
-func (c *streamCmd) backupAction(_ *cobra.Command, args []string) error {
-	c.stream = args[0]
-	c.backupDirectory = args[1]
-
-	var err error
-
-	c.nc, c.mgr, err = prepareHelper("", natsOpts()...)
-	fatalIfError(err, "setup failed")
-
-	stream, err := c.loadStream(c.stream)
-	if err != nil {
-		return err
-	}
-
-	// Default is set in strBackup flags.
-	var chunkSize, wndSize int64
-	if c.chunkSize != "" {
-		if chunkSize, err = iu.ParseStringAsBytes(c.chunkSize, 32); err != nil {
-			return err
-		}
-	}
-	if c.wndSize != "" {
-		if wndSize, err = iu.ParseStringAsBytes(c.wndSize, 32); err != nil {
-			return err
-		}
-	}
-
-	err = backupStream(stream, c.showProgress, c.snapShotConsumers, c.healthCheck, c.backupDirectory, int(chunkSize), int(wndSize))
-	fatalIfError(err, "snapshot failed")
-
-	return nil
 }
 
 func (c *streamCmd) reportAction(_ *cobra.Command, _ []string) error {

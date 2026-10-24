@@ -17,16 +17,13 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/dustin/go-humanize"
-	"github.com/nats-io/jsm.go"
 	"github.com/nats-io/jsm.go/api"
 	"github.com/nats-io/jsm.go/serverdata"
 	"github.com/nats-io/nats-server/v2/server"
@@ -41,18 +38,10 @@ type actCmd struct {
 	subject string
 	topk    int
 
-	backupDirectory   string
-	healthCheck       bool
-	snapShotConsumers bool
-	force             bool
-	failOnWarn        bool
-
-	placementCluster string
-	placementTags    []string
-	reverse          bool
-	stateFilter      string
-	user             string
-	filterReason     string
+	reverse      bool
+	stateFilter  string
+	user         string
+	filterReason string
 }
 
 func configureActCommand(app commandHost) {
@@ -87,156 +76,16 @@ func configureActCommand(app commandHost) {
 	stats.RunE = c.reportServerStats
 	cmdAddTags(stats, "scope:user", "impact:ro")
 
-	backup := addCommand(act, "backup", "Creates a backup of all  JetStream Streams over the NATS network")
-	backup.Aliases = []string{"snapshot"}
-	backup.RunE = c.backupAction
-	cmdAddTags(backup, "scope:user", "impact:ro")
-	addArg(backup, "target", "Directory to create the backup in", true, "string")
-	backup.Flags().BoolVar(&c.healthCheck, "check", false, "Checks the Stream for health prior to backup")
-	negatableBoolVar(backup, &c.snapShotConsumers, "consumers", true, "Enable or disable consumer backups")
-	backup.Flags().BoolVarP(&c.force, "force", "f", false, "Perform backup without prompting")
-	backup.Flags().BoolVarP(&c.failOnWarn, "critical-warnings", "w", false, "Treat warnings as failures")
-
-	restore := addCommand(act, "restore", "Restore an account backup over the NATS network")
-	restore.RunE = c.restoreAction
-	cmdAddTags(restore, "scope:user", "impact:rw")
-	addArg(restore, "directory", "The directory holding the account backup to restore", true, "string")
-	restore.Flags().StringVar(&c.placementCluster, "cluster", "", "Place the stream in a specific cluster")
-	restore.Flags().StringArrayVar(&c.placementTags, "tag", nil, "Place the stream on servers that has specific tags (pass multiple times)")
+	backup := &backupCmd{}
+	bkCmd := deprecatedCommand(backup.accountBackupCommand(act, "backup"), "nats account backup", "nats backup account")
+	bkCmd.Aliases = []string{"snapshot"}
+	deprecatedCommand(backup.accountRestoreCommand(act, "restore"), "nats account restore", "nats backup restore account")
 
 	configureAccountTLSCommand(act)
 }
 
 func init() {
 	registerCommand("account", 0, configureActCommand)
-}
-
-func (c *actCmd) backupAction(_ *cobra.Command, args []string) error {
-	c.backupDirectory = args[0]
-
-	var err error
-
-	_, mgr, err := prepareHelper("", natsOpts()...)
-	fatalIfError(err, "setup failed")
-
-	streams, missing, offline, err := mgr.Streams(nil)
-	if err != nil {
-		return err
-	}
-
-	if len(missing) > 0 {
-		return fmt.Errorf("could not obtain stream information for %d streams", len(missing))
-	}
-	if !c.force && len(offline) > 0 {
-		return fmt.Errorf("could not obtain stream information for %d offline streams", len(offline))
-	}
-	if len(streams) == 0 {
-		return fmt.Errorf("no streams found")
-	}
-
-	totalSize := uint64(0)
-	totalConsumers := 0
-
-	for _, s := range streams {
-		state, _ := s.LatestState()
-		totalConsumers += state.Consumers
-		totalSize += state.Bytes
-	}
-
-	cols := newColumnsf("Performing backup of all streams to %s", c.backupDirectory)
-	cols.AddRow("Streams", len(streams))
-	cols.AddRow("Size", humanize.IBytes(totalSize))
-	cols.AddRow("Consumers:", totalConsumers)
-	cols.Println()
-	cols.Frender(os.Stdout)
-
-	if !c.force {
-		ok, err := askConfirmation("Perform backup", false)
-		if err != nil {
-			return err
-		}
-
-		if !ok {
-			return nil
-		}
-	}
-
-	err = os.MkdirAll(c.backupDirectory, 0700)
-	if err != nil {
-		return err
-	}
-
-	var errs []error
-	var warns []error
-
-	for _, s := range streams {
-		err = backupStream(s, false, c.snapShotConsumers, c.healthCheck, filepath.Join(c.backupDirectory, s.Name()), 128*1024, 0)
-		if errors.Is(err, jsm.ErrMemoryStreamNotSupported) {
-			fmt.Printf("Backup of %s failed: %v\n", s.Name(), err)
-			warns = append(warns, fmt.Errorf("%s: %w", s.Name(), err))
-		} else if err != nil {
-			fmt.Printf("Backup of %s failed: %s\n", s.Name(), err)
-			errs = append(errs, fmt.Errorf("%s: %s", s.Name(), err))
-		}
-		fmt.Println()
-	}
-
-	if len(warns) > 0 {
-		fmt.Printf("Backup Warnings: \n")
-		for _, err := range warns {
-			fmt.Printf("  %s\n", err)
-		}
-		fmt.Println()
-	}
-
-	if len(errs) > 0 {
-		fmt.Printf("Backup failures: \n")
-		for _, err := range errs {
-			fmt.Printf("  %s\n", err)
-		}
-		fmt.Println()
-	}
-
-	if len(errs) > 0 || len(warns) > 0 && c.failOnWarn {
-		return fmt.Errorf("backup failed")
-	}
-
-	return nil
-}
-
-func (c *actCmd) restoreAction(_ *cobra.Command, args []string) error {
-	c.backupDirectory = args[0]
-
-	_, mgr, err := prepareHelper("", natsOpts()...)
-	fatalIfError(err, "setup failed")
-	streams, err := mgr.StreamNames(nil)
-	if err != nil {
-		return err
-	}
-	existingStreams := map[string]struct{}{}
-	for _, n := range streams {
-		existingStreams[n] = struct{}{}
-	}
-	de, err := os.ReadDir(c.backupDirectory)
-	fatalIfError(err, "setup failed")
-	for _, d := range de {
-		if !d.IsDir() {
-			fatalf("expected a directory %q", d.Name())
-		}
-		if _, ok := existingStreams[d.Name()]; ok {
-			fatalf("stream %q exists already", d.Name())
-		}
-		_, err := os.Stat(filepath.Join(c.backupDirectory, d.Name(), "backup.json"))
-		fatalIfError(err, "expected backup.json")
-	}
-	fmt.Printf("Restoring backup of all %d streams in directory %q\n\n", len(de), c.backupDirectory)
-	s := &streamCmd{msgID: -1, showProgress: false, placementCluster: c.placementCluster, placementTags: c.placementTags}
-	for _, d := range de {
-		s.backupDirectory = filepath.Join(c.backupDirectory, d.Name())
-		err := s.restoreAction(nil, nil)
-		fatalIfError(err, "restore for %s failed", d.Name())
-	}
-	return nil
 }
 
 func (c *actCmd) reportConnectionsAction(_ *cobra.Command, _ []string) error {
